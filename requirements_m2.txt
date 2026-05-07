@@ -1,0 +1,25 @@
+# ============================================================
+# requirements_m2.txt
+# MedOracle — Member 2 (Vanaiyan): Video + Fusion Module
+# Install: pip install -r requirements_shared.txt -r requirements_m2.txt
+# ============================================================
+
+# Deep learning
+torch>=2.1.0
+torchvision>=0.16.0
+
+# Face detection
+ultralytics>=8.0.0          # YOLOv8
+
+# Video / image processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# ML utilities
+scikit-learn>=1.3.0         # GroupKFold, metrics, compute_class_weight
+
+# Data
+pandas>=2.0.0
+
+# Testing
+pytest>=7.4.0

@@ -1,0 +1,8 @@
+# ============================================================
+# requirements_shared.txt
+# MedOracle — Shared dependencies (all members need these)
+# Install: pip install -r requirements_shared.txt
+# ============================================================
+
+numpy>=1.24.0
+scipy>=1.11.0

@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data — never commit raw datasets
+data/DEAP/*.mat
+data/DEAP/*.bdf
+data/CREMA-D/*.flac
+data/CREMA-D/*.wav
+data/CREMA-D/AudioWAV/
+data/CREMA-D/VideoFlash/
+data/CREMA-D/VideoMP4/
+
+# Model checkpoints (large)
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+saved_models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+runs/
+
+# Secrets
+.env
+*.key
+
+# SHAP cache
+shap_cache/
