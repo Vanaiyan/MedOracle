@@ -1,0 +1,203 @@
+"""
+member2_video_fusion/models/bilstm.py
+======================================
+MedOracle — Member 2 (Vanaiyan)
+
+Bidirectional LSTM temporal model.
+
+Takes the sequence of 2048-dim frame features produced by ResNet50Encoder
+and models the temporal dynamics across T=16 frames to produce a final
+5-class emotion prediction.
+
+Why BiLSTM? (Hochreiter & Schmidhuber, 1997)
+---------------------------------------------
+  A unidirectional LSTM only sees frames left-to-right.
+  A BiLSTM processes the sequence in both directions and concatenates
+  the hidden states, giving the model context from both early and late
+  frames when making its decision. This is important for emotion — a
+  smile that builds gradually looks different from one that fades.
+
+Architecture
+------------
+  Input  : (B, T, 2048)   — sequence of ResNet50 frame features
+  BiLSTM : hidden=256 per direction × 2 directions = 512 effective
+           2 stacked layers, inter-layer dropout=0.3
+  Output : hidden state at last timestep → (B, 512)
+  Head   : Linear(512 → 256) → ReLU → Dropout(0.4) → Linear(256 → 5)
+  Final  : logits (B, 5)  +  softmax probabilities (B, 5)
+
+Author: Vanaiyan Kirupagaran (214215H)
+"""
+
+from __future__ import annotations
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+# ---------------------------------------------------------------------------
+# BiLSTM Emotion Classifier
+# ---------------------------------------------------------------------------
+
+class EmotionBiLSTM(nn.Module):
+    """
+    Bidirectional LSTM that classifies an emotion from a sequence of
+    per-frame feature vectors.
+
+    Parameters
+    ----------
+    input_dim   : int   — dimensionality of each frame feature (default 2048)
+    hidden_dim  : int   — hidden units per direction (default 256, × 2 = 512)
+    num_layers  : int   — number of stacked LSTM layers (default 2)
+    num_classes : int   — number of emotion classes (default 5)
+    lstm_dropout: float — dropout between LSTM layers (default 0.3)
+    fc_dropout  : float — dropout before final FC layer (default 0.4)
+
+    Forward input  : (B, T, input_dim)   — e.g. (B, 16, 2048)
+    Forward output : dict with keys
+        "logits" : (B, 5)   — raw scores (use for loss)
+        "probs"  : (B, 5)   — softmax probabilities (use for prediction)
+    """
+
+    def __init__(
+        self,
+        input_dim:    int   = 2048,
+        hidden_dim:   int   = 256,
+        num_layers:   int   = 2,
+        num_classes:  int   = 5,
+        lstm_dropout: float = 0.3,
+        fc_dropout:   float = 0.4,
+    ):
+        super().__init__()
+
+        self.input_dim  = input_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.num_classes = num_classes
+
+        # ── BiLSTM ─────────────────────────────────────────────────────────
+        # bidirectional=True → effective hidden size = hidden_dim × 2
+        # dropout only applies between layers (not after the last layer)
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,       # input: (B, T, input_dim)
+            bidirectional=True,
+            dropout=lstm_dropout if num_layers > 1 else 0.0,
+        )
+
+        # ── Classification head ────────────────────────────────────────────
+        # Input: hidden_dim × 2 (bidirectional concatenation)
+        lstm_out_dim = hidden_dim * 2   # 256 × 2 = 512
+
+        self.classifier = nn.Sequential(
+            nn.Linear(lstm_out_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=fc_dropout),
+            nn.Linear(256, num_classes),
+        )
+
+    # ── Forward ─────────────────────────────────────────────────────────────
+
+    def forward(self, x: torch.Tensor) -> dict:
+        """
+        Parameters
+        ----------
+        x : torch.Tensor of shape (B, T, input_dim)
+            Sequence of per-frame feature vectors.
+            Typically (B, 16, 2048) from ResNet50Encoder.
+
+        Returns
+        -------
+        dict:
+            "logits"   : (B, num_classes)  — raw scores, used for cross-entropy loss
+            "probs"    : (B, num_classes)  — softmax probabilities, used for prediction
+            "features" : (B, 512)          — BiLSTM output before classifier (for SHAP)
+        """
+        # lstm_out : (B, T, hidden_dim × 2)
+        # h_n      : (num_layers × 2, B, hidden_dim)  — final hidden states
+        lstm_out, (h_n, _) = self.lstm(x)
+
+        # Take the output at the last timestep
+        # lstm_out[:, -1, :] = (B, hidden_dim × 2)
+        last_hidden = lstm_out[:, -1, :]   # (B, 512)
+
+        logits = self.classifier(last_hidden)   # (B, 5)
+        probs  = F.softmax(logits, dim=-1)      # (B, 5)
+
+        return {
+            "logits":   logits,
+            "probs":    probs,
+            "features": last_hidden,   # pre-classifier, used by SHAP
+        }
+
+    # ── Utilities ────────────────────────────────────────────────────────────
+
+    def param_summary(self) -> dict:
+        total     = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return {
+            "total":     total,
+            "trainable": trainable,
+            "lstm_out_dim": self.hidden_dim * 2,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Smoke test
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    print("=== EmotionBiLSTM ===\n")
+
+    bilstm = EmotionBiLSTM(
+        input_dim=2048, hidden_dim=256, num_layers=2,
+        num_classes=5, lstm_dropout=0.3, fc_dropout=0.4,
+    )
+    bilstm.eval()
+
+    summary = bilstm.param_summary()
+    print(f"Parameters:")
+    print(f"  Total     : {summary['total']:,}")
+    print(f"  Trainable : {summary['trainable']:,}")
+    print(f"  LSTM out  : {summary['lstm_out_dim']}-dim")
+
+    # ── 1. Single sample (B=1, T=16, input_dim=2048)
+    dummy = torch.zeros(1, 16, 2048)
+    with torch.no_grad():
+        out = bilstm(dummy)
+
+    assert out["logits"].shape   == (1, 5), f"logits: {out['logits'].shape}"
+    assert out["probs"].shape    == (1, 5), f"probs: {out['probs'].shape}"
+    assert out["features"].shape == (1, 512)
+
+    prob_sum = out["probs"].sum(dim=-1).item()
+    assert abs(prob_sum - 1.0) < 1e-5, f"probs don't sum to 1: {prob_sum}"
+
+    print(f"\nSingle sample  input : (1, 16, 2048)")
+    print(f"  logits   : {tuple(out['logits'].shape)} ✓")
+    print(f"  probs    : {tuple(out['probs'].shape)}  (sum={prob_sum:.4f}) ✓")
+    print(f"  features : {tuple(out['features'].shape)} ✓")
+
+    # ── 2. Batch of 8
+    dummy_batch = torch.zeros(8, 16, 2048)
+    with torch.no_grad():
+        out_batch = bilstm(dummy_batch)
+
+    assert out_batch["logits"].shape == (8, 5)
+    assert out_batch["probs"].shape  == (8, 5)
+    print(f"\nBatch of 8     input : (8, 16, 2048)")
+    print(f"  logits   : {tuple(out_batch['logits'].shape)} ✓")
+    print(f"  probs    : {tuple(out_batch['probs'].shape)} ✓")
+
+    # ── 3. Variable sequence length (T=8, e.g. short clip)
+    dummy_short = torch.zeros(4, 8, 2048)
+    with torch.no_grad():
+        out_short = bilstm(dummy_short)
+    assert out_short["logits"].shape == (4, 5)
+    print(f"\nShort sequence input : (4, 8, 2048)")
+    print(f"  logits   : {tuple(out_short['logits'].shape)} ✓")
+
+    print("\n✓ EmotionBiLSTM checks passed")
