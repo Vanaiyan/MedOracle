@@ -57,3 +57,6 @@ runs/
 
 # SHAP cache
 shap_cache/
+
+data/DEAP/
+data/CREMA-D/
