@@ -4,12 +4,12 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import NavBar              from '../components/NavBar';
-import StatCards           from '../components/StatCards';
-import EmotionTrendChart   from '../components/EmotionTrendChart';
-import SHAPBarChart        from '../components/SHAPBarChart';
+import NavBar from '../components/NavBar';
+import StatCards from '../components/StatCards';
+import EmotionTrendChart from '../components/EmotionTrendChart';
+import SHAPBarChart from '../components/SHAPBarChart';
 import SessionHistoryPanel from '../components/SessionHistoryPanel';
-import ChatbotPanel        from '../components/ChatbotPanel';
+import ChatbotPanel from '../components/ChatbotPanel';
 import { dashboardAPI, sessionsAPI, predictAPI } from '../api/client';
 import { chatAPI } from '../api/client';
 
@@ -18,35 +18,78 @@ const EMOTIONS = ['stress', 'calm', 'happy', 'sad', 'angry'];
 
 // Demo prediction_output for quick testing
 function makeDemoPayload(emotion) {
-  const probs = { stress: 0.05, calm: 0.05, happy: 0.05, sad: 0.05, angry: 0.05 };
-  probs[emotion] = 0.80;
-  const total = Object.values(probs).reduce((a,b) => a+b, 0);
-  Object.keys(probs).forEach(k => probs[k] = +(probs[k]/total).toFixed(4));
+  // Emotion-specific probability profiles
+  const profiles = {
+    stress: { stress: 0.72, calm: 0.08, happy: 0.04, sad: 0.10, angry: 0.06 },
+    calm: { stress: 0.05, calm: 0.75, happy: 0.12, sad: 0.05, angry: 0.03 },
+    happy: { stress: 0.04, calm: 0.10, happy: 0.78, sad: 0.04, angry: 0.04 },
+    sad: { stress: 0.08, calm: 0.06, happy: 0.03, sad: 0.74, angry: 0.09 },
+    angry: { stress: 0.10, calm: 0.03, happy: 0.04, sad: 0.07, angry: 0.76 },
+  };
+
+  // Emotion-specific modality weights (some emotions show more in physio, some in video)
+  const modalityProfiles = {
+    stress: { physio: 0.78, video: 0.22 },
+    calm: { physio: 0.55, video: 0.45 },
+    happy: { physio: 0.38, video: 0.62 },
+    sad: { physio: 0.60, video: 0.40 },
+    angry: { physio: 0.45, video: 0.55 },
+  };
+
+  // Emotion-specific signal quality
+  const qualityProfiles = {
+    stress: { eeg: 'good', gsr: 'good', video: 'degraded' },
+    calm: { eeg: 'good', gsr: 'good', video: 'good' },
+    happy: { eeg: 'degraded', gsr: 'good', video: 'good' },
+    sad: { eeg: 'good', gsr: 'degraded', video: 'good' },
+    angry: { eeg: 'good', gsr: 'good', video: 'good' },
+  };
+
+  const probs = profiles[emotion];
+  const weights = modalityProfiles[emotion];
+  const quality = qualityProfiles[emotion];
+  const confidence = probs[emotion];
+
+  // Slightly different per-modality predictions
+  const physioProbs = { ...probs };
+  physioProbs[emotion] = Math.min(1, probs[emotion] + 0.05);
+
+  const videoProbs = { ...probs };
+  videoProbs[emotion] = Math.max(0, probs[emotion] - 0.10);
+
   return {
     predicted_emotion: emotion,
-    confidence: 0.80,
+    confidence: confidence,
     class_probabilities: probs,
-    modality_weights: { physio: 0.6, video: 0.4 },
-    signal_quality: { eeg: 'good', gsr: 'good', video: 'good' },
+    modality_weights: weights,
+    signal_quality: quality,
     per_modality_predictions: {
-      physio: { predicted_emotion: emotion, confidence: 0.75, class_probabilities: probs },
-      video:  { predicted_emotion: emotion, confidence: 0.65, class_probabilities: probs },
+      physio: {
+        predicted_emotion: emotion,
+        confidence: physioProbs[emotion],
+        class_probabilities: physioProbs,
+      },
+      video: {
+        predicted_emotion: emotion,
+        confidence: videoProbs[emotion],
+        class_probabilities: videoProbs,
+      },
     },
   };
 }
 
 export default function Dashboard() {
-  const [summary,          setSummary        ] = useState(null);
-  const [activeSessionId,  setActiveSessionId] = useState(null);
-  const [sessionDetail,    setSessionDetail  ] = useState(null);
-  const [autoExplanation,  setAutoExplanation] = useState(null);
-  const [runningPrediction,setRunningPrediction] = useState(false);
-  const [demoEmotion,      setDemoEmotion    ] = useState('stress');
-  const [showDemoPanel,    setShowDemoPanel  ] = useState(false);
+  const [summary, setSummary] = useState(null);
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [sessionDetail, setSessionDetail] = useState(null);
+  const [autoExplanation, setAutoExplanation] = useState(null);
+  const [runningPrediction, setRunningPrediction] = useState(false);
+  const [demoEmotion, setDemoEmotion] = useState('stress');
+  const [showDemoPanel, setShowDemoPanel] = useState(false);
 
   // Load dashboard summary
   const loadSummary = useCallback(() => {
-    dashboardAPI.summary().then(r => setSummary(r.data)).catch(() => {});
+    dashboardAPI.summary().then(r => setSummary(r.data)).catch(() => { });
   }, []);
 
   useEffect(() => { loadSummary(); }, [loadSummary]);
@@ -54,8 +97,19 @@ export default function Dashboard() {
   // Load session detail when selected
   useEffect(() => {
     if (!activeSessionId) { setSessionDetail(null); return; }
-    sessionsAPI.detail(activeSessionId).then(r => setSessionDetail(r.data)).catch(() => {});
+    sessionsAPI.detail(activeSessionId).then(r => setSessionDetail(r.data)).catch(() => { });
   }, [activeSessionId]);
+
+  const sessionStats = sessionDetail
+    ? {
+      ...summary,
+      session_count: summary?.session_count ?? null,
+      dominant_emotion: sessionDetail.predicted_emotion,
+      dominant_modality: sessionDetail.modality_weights?.physio >= sessionDetail.modality_weights?.video
+        ? 'physio' : 'video',
+      avg_confidence: sessionDetail.confidence,
+    }
+    : null;
 
   // Run demo prediction
   const runDemoPrediction = async () => {
@@ -106,12 +160,16 @@ export default function Dashboard() {
                 value={demoEmotion}
                 onChange={e => setDemoEmotion(e.target.value)}
                 style={{
-                  background: 'var(--bg-card)', border: '1px solid var(--border)',
+                  background: '#060404f4', border: '1px solid var(--border)',
                   color: 'var(--text-primary)', padding: '0.5rem 0.75rem',
                   borderRadius: 8, fontFamily: 'var(--font)', fontSize: 13, cursor: 'pointer',
                 }}
               >
-                {EMOTIONS.map(e => <option key={e} value={e}>{e.charAt(0).toUpperCase()+e.slice(1)}</option>)}
+                {EMOTIONS.map(e => (
+                  <option key={e} value={e} style={{ background: '#060404f4', color: '#ffffff' }}>
+                    {e.charAt(0).toUpperCase() + e.slice(1)}
+                  </option>
+                ))}
               </select>
               <button
                 id="run-prediction-btn"
@@ -119,13 +177,13 @@ export default function Dashboard() {
                 onClick={runDemoPrediction}
                 disabled={runningPrediction}
               >
-                {runningPrediction ? <><span className="spinner" style={{width:14,height:14}} /> Running…</> : '▶ Run Prediction'}
+                {runningPrediction ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Running…</> : '▶ Run Prediction'}
               </button>
             </div>
           </div>
 
           {/* Stat cards */}
-          <StatCards summary={summary} />
+          <StatCards summary={sessionStats ?? summary} />
 
           {/* Charts row */}
           <div className="grid-2">
@@ -154,9 +212,9 @@ export default function Dashboard() {
                 <div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Modality Weights</div>
                   <div style={{ fontSize: 13, marginTop: 4, color: 'var(--text-primary)' }}>
-                    Physio <strong>{((sessionDetail.modality_weights?.physio ?? 0)*100).toFixed(0)}%</strong>
+                    Physio <strong>{((sessionDetail.modality_weights?.physio ?? 0) * 100).toFixed(0)}%</strong>
                     {' · '}
-                    Video <strong>{((sessionDetail.modality_weights?.video ?? 0)*100).toFixed(0)}%</strong>
+                    Video <strong>{((sessionDetail.modality_weights?.video ?? 0) * 100).toFixed(0)}%</strong>
                   </div>
                 </div>
                 <div>

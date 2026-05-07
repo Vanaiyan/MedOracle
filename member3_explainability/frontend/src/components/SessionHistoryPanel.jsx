@@ -11,7 +11,9 @@ const EMOTION_EMOJI = {
 };
 
 function formatDate(ts) {
-  const d = new Date(ts);
+  // Append Z if missing so JS treats it as UTC, then converts to local time
+  const utcTs = ts.endsWith('Z') ? ts : ts + 'Z';
+  const d = new Date(utcTs);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }

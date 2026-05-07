@@ -7,8 +7,9 @@ import { useAuth } from '../context/AuthContext';
 
 export default function LoginPage({ onSwitch }) {
   const { login, loading, error, setError } = useAuth();
-  const [email, setEmail]   = useState('');
-  const [pass,  setPass ]   = useState('');
+  const [email, setEmail]       = useState('');
+  const [pass,  setPass ]       = useState('');
+  const [showPass, setShowPass] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -40,15 +41,32 @@ export default function LoginPage({ onSwitch }) {
 
           <div className="form-group">
             <label className="label" htmlFor="login-password">Password</label>
-            <input
-              id="login-password"
-              className="input"
-              type="password"
-              placeholder="••••••••"
-              value={pass}
-              onChange={e => { setPass(e.target.value); setError(''); }}
-              required
-            />
+            <div style={{ position: 'relative' }}>
+              <input
+                id="login-password"
+                className="input"
+                type={showPass ? 'text' : 'password'}
+                placeholder="••••••••"
+                value={pass}
+                onChange={e => { setPass(e.target.value); setError(''); }}
+                required
+                style={{ paddingRight: '2.5rem' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPass(v => !v)}
+                style={{
+                  position: 'absolute', right: '0.75rem', top: '50%',
+                  transform: 'translateY(-50%)', background: 'none',
+                  border: 'none', cursor: 'pointer', padding: 0,
+                  color: 'var(--text-muted, #888)', fontSize: '1.1rem',
+                  lineHeight: 1,
+                }}
+                aria-label={showPass ? 'Hide password' : 'Show password'}
+              >
+                {showPass ? '🙈' : '👁️'}
+              </button>
+            </div>
           </div>
 
           {error && <p className="error-msg" style={{ marginBottom: '0.75rem' }}>{error}</p>}
