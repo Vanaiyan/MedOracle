@@ -12,7 +12,13 @@ Author : Adshaya Balarajah (214024V)
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+
+# Load .env from the project root (member3_explainability/.env)
+# regardless of where uvicorn is launched from
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from sqlalchemy.orm import DeclarativeBase
 
 # ---------------------------------------------------------------------------

@@ -65,8 +65,9 @@ export const authAPI = {
 };
 
 export const predictAPI = {
-  predict:  (payload)    => api.post('/predict', payload),
-  explain:  (session_id) => api.get(`/explain/${session_id}`),
+  predict:          (payload) => api.post('/predict', payload),
+  predictSynthetic: (emotion) => api.post(`/predict/synthetic${emotion ? `?emotion=${emotion}` : ''}`),
+  explain:          (session_id) => api.get(`/explain/${session_id}`),
 };
 
 export const sessionsAPI = {
