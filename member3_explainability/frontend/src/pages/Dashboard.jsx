@@ -105,18 +105,27 @@ export default function Dashboard() {
       ...summary,
       session_count: summary?.session_count ?? null,
       dominant_emotion: sessionDetail.predicted_emotion,
-      dominant_modality: sessionDetail.modality_weights?.physio >= sessionDetail.modality_weights?.video
-        ? 'physio' : 'video',
+      // Use SHAP feature importance to pick top modality (consistent with the bar chart)
+      // EEG + GSR together = physio; if their combined importance beats video → physio wins
+      dominant_modality: (() => {
+        const fi = sessionDetail.feature_importance;
+        if (fi) {
+          const physioScore = (fi.EEG || 0) + (fi.GSR || 0);
+          return physioScore >= (fi.video || 0) ? 'physio' : 'video';
+        }
+        // Fallback to modality weights if SHAP not available
+        return sessionDetail.modality_weights?.physio >= sessionDetail.modality_weights?.video
+          ? 'physio' : 'video';
+      })(),
       avg_confidence: sessionDetail.confidence,
     }
     : null;
 
-  // Run demo prediction
+  // Run synthetic prediction (backend generates randomised fused output)
   const runDemoPrediction = async () => {
     setRunningPrediction(true);
     try {
-      const payload = makeDemoPayload(demoEmotion);
-      const { data } = await predictAPI.predict(payload);
+      const { data } = await predictAPI.predictSynthetic(demoEmotion);
       setActiveSessionId(data.session_id);
       // Get auto-explanation from LLM
       try {
