@@ -178,7 +178,9 @@ class EmotionTrendPoint(BaseModel):
     timestamp:            datetime
     predicted_emotion:    str
     fused_confidence:     float
-    physio_confidence:    Optional[float]
+    eeg_confidence:       Optional[float]
+    gsr_confidence:       Optional[float]
+    video_confidence:     Optional[float]
 
 
 class DashboardSummary(BaseModel):

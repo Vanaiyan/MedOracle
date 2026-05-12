@@ -66,27 +66,45 @@ async def dashboard_summary(
         if s.shap_log:
             fi = s.shap_log.feature_importance or {}
             if fi:
+                # Vote for the single signal with highest SHAP importance (EEG, GSR, or video)
                 dominant = max(fi, key=fi.get)
-                modality_votes.append("physio" if dominant in ("EEG", "GSR") else "video")
+                modality_votes.append(dominant)
 
     dominant_modality: Optional[str] = None
     if modality_votes:
         dominant_modality = Counter(modality_votes).most_common(1)[0][0]
 
+    # Quality weight mapping (same as kernel_shap.py)
+    _QUALITY_WEIGHT = {"good": 1.0, "degraded": 0.5, "poor": 0.1}
+
     # Emotion trend
     trend: list[EmotionTrendPoint] = []
     for s in sessions:
-        physio_conf: Optional[float] = None
+        eeg_conf: Optional[float] = None
+        gsr_conf: Optional[float] = None
+
         pmr = s.shap_log.per_modality_predictions if s.shap_log else None
+        sq  = s.signal_quality or {}
+
+        video_conf: Optional[float] = None
         if pmr and "physio" in pmr:
-            physio_conf = pmr["physio"].get("confidence")
+            physio_conf = pmr["physio"].get("confidence") or 0.0
+            w_eeg = _QUALITY_WEIGHT.get(sq.get("eeg", "good"), 1.0)
+            w_gsr = _QUALITY_WEIGHT.get(sq.get("gsr", "good"), 1.0)
+            total = w_eeg + w_gsr if (w_eeg + w_gsr) > 0 else 1.0
+            eeg_conf = round(physio_conf * (w_eeg / total), 4)
+            gsr_conf = round(physio_conf * (w_gsr / total), 4)
+        if pmr and "video" in pmr:
+            video_conf = pmr["video"].get("confidence")
 
         trend.append(EmotionTrendPoint(
             session_id=s.session_id,
             timestamp=s.timestamp,
             predicted_emotion=s.predicted_emotion,
             fused_confidence=s.confidence,
-            physio_confidence=physio_conf,
+            eeg_confidence=eeg_conf,
+            gsr_confidence=gsr_conf,
+            video_confidence=video_conf,
         ))
 
     return DashboardSummary(

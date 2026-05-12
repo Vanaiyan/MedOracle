@@ -110,12 +110,10 @@ export default function Dashboard() {
       dominant_modality: (() => {
         const fi = sessionDetail.feature_importance;
         if (fi) {
-          const physioScore = (fi.EEG || 0) + (fi.GSR || 0);
-          return physioScore >= (fi.video || 0) ? 'physio' : 'video';
+          // Return the single signal with highest SHAP importance
+          return Object.entries(fi).reduce((a, b) => b[1] > a[1] ? b : a)[0];
         }
-        // Fallback to modality weights if SHAP not available
-        return sessionDetail.modality_weights?.physio >= sessionDetail.modality_weights?.video
-          ? 'physio' : 'video';
+        return 'video';
       })(),
       avg_confidence: sessionDetail.confidence,
     }
@@ -221,9 +219,24 @@ export default function Dashboard() {
                 <div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Modality Weights</div>
                   <div style={{ fontSize: 13, marginTop: 4, color: 'var(--text-primary)' }}>
-                    Physio <strong>{((sessionDetail.modality_weights?.physio ?? 0) * 100).toFixed(0)}%</strong>
-                    {' · '}
-                    Video <strong>{((sessionDetail.modality_weights?.video ?? 0) * 100).toFixed(0)}%</strong>
+                    {(() => {
+                      const sq = sessionDetail.signal_quality || {};
+                      const qw = { good: 1.0, degraded: 0.5, poor: 0.1 };
+                      const wEEG = qw[sq.eeg] ?? 1.0;
+                      const wGSR = qw[sq.gsr] ?? 1.0;
+                      const total = wEEG + wGSR || 1;
+                      const physio = sessionDetail.modality_weights?.physio ?? 0;
+                      const eegW = (physio * (wEEG / total) * 100).toFixed(0);
+                      const gsrW = (physio * (wGSR / total) * 100).toFixed(0);
+                      const vidW = ((sessionDetail.modality_weights?.video ?? 0) * 100).toFixed(0);
+                      return <>
+                        EEG <strong>{eegW}%</strong>
+                        {' · '}
+                        GSR <strong>{gsrW}%</strong>
+                        {' · '}
+                        Video <strong>{vidW}%</strong>
+                      </>;
+                    })()}
                   </div>
                 </div>
                 <div>

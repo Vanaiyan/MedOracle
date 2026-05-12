@@ -64,20 +64,28 @@ def generate_prediction_output(emotion: Optional[str] = None) -> dict:
     # Fused confidence (how sure the fused model is)
     fused_confidence = round(random.uniform(0.60, 0.92), 4)
 
-    # Per-modality predictions — each modality may agree or slightly disagree
-    # with the dominant emotion to create interesting SHAP spread
-    physio_dominant = emotion if random.random() > 0.25 else random.choice(EMOTIONS)
-    video_dominant  = emotion if random.random() > 0.20 else random.choice(EMOTIONS)
+    # Per-modality predictions — modalities always agree on the dominant emotion
+    # but with different confidence levels to create interesting SHAP spread.
+    # Both must predict the same emotion as the fused output to ensure
+    # SHAP values are positive and meaningful (not artifacts of inconsistency).
+    physio_conf = round(random.uniform(0.45, 0.82), 4)
+    video_conf  = round(random.uniform(0.45, 0.82), 4)
 
-    physio_conf = round(random.uniform(0.50, 0.88), 4)
-    video_conf  = round(random.uniform(0.55, 0.90), 4)
+    # One modality is stronger than the other to create non-trivial SHAP split
+    if random.random() > 0.5:
+        physio_conf = min(physio_conf + 0.15, 0.92)   # physio dominates
+    else:
+        video_conf  = min(video_conf  + 0.15, 0.92)   # video dominates
 
-    physio_probs = _make_class_probs(physio_dominant, physio_conf)
-    video_probs  = _make_class_probs(video_dominant,  video_conf)
+    physio_probs = _make_class_probs(emotion, physio_conf)
+    video_probs  = _make_class_probs(emotion, video_conf)
 
-    # Signal quality — random but weighted towards "good"
-    eeg_quality   = random.choice(QUALITIES)
-    gsr_quality   = random.choice(QUALITIES)
+    # Signal quality — EEG and GSR always get different quality levels
+    # and which one is higher is random each time (fair alternation).
+    # e.g. sometimes EEG=good/GSR=degraded, sometimes EEG=poor/GSR=good, etc.
+    eeg_gsr_levels = random.sample(["good", "degraded", "poor"], 2)
+    eeg_quality   = eeg_gsr_levels[0]
+    gsr_quality   = eeg_gsr_levels[1]
     video_quality = random.choice(QUALITIES)
 
     # Modality weights — physio + video sum to 1.0
@@ -99,12 +107,12 @@ def generate_prediction_output(emotion: Optional[str] = None) -> dict:
         },
         "per_modality_predictions": {
             "physio": {
-                "predicted_emotion":   physio_dominant,
+                "predicted_emotion":   emotion,
                 "confidence":          physio_conf,
                 "class_probabilities": physio_probs,
             },
             "video": {
-                "predicted_emotion":   video_dominant,
+                "predicted_emotion":   emotion,
                 "confidence":          video_conf,
                 "class_probabilities": video_probs,
             },

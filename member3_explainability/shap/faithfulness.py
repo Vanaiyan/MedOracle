@@ -42,32 +42,33 @@ from member3_explainability.shap.kernel_shap import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _rank_list(values: List[float]) -> List[int]:
+def _pearson(xs: List[float], ys: List[float]) -> float:
     """
-    Return 1-based ranks for a list of values (largest = rank 1).
-    Ties share the lower rank (standard competition ranking).
-    """
-    sorted_idx = sorted(range(len(values)), key=lambda i: -values[i])
-    ranks = [0] * len(values)
-    for rank, idx in enumerate(sorted_idx, start=1):
-        ranks[idx] = rank
-    return ranks
+    Pearson correlation between two equal-length lists.
+    Returns a continuous value in [-1, 1].
+    Returns 1.0 for lists of length < 2 or zero-variance inputs.
 
-
-def _spearman(xs: List[float], ys: List[float]) -> float:
+    Unlike Spearman (rank-based), Pearson works on actual values so it
+    produces continuous faithfulness scores even with only 3 data points.
+    Spearman with n=3 can only return {-1, -0.5, 0.5, 1} — too coarse.
     """
-    Spearman rank-order correlation between two equal-length lists.
-    Returns a value in [-1, 1].  Returns 1.0 for lists of length < 2.
-    """
+    import math
     n = len(xs)
     if n < 2:
         return 1.0
 
-    rx = _rank_list(xs)
-    ry = _rank_list(ys)
+    mx = sum(xs) / n
+    my = sum(ys) / n
 
-    d2_sum = sum((rx[i] - ry[i]) ** 2 for i in range(n))
-    return 1.0 - (6 * d2_sum) / (n * (n ** 2 - 1))
+    cov  = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    sx   = math.sqrt(sum((xs[i] - mx) ** 2 for i in range(n)))
+    sy   = math.sqrt(sum((ys[i] - my) ** 2 for i in range(n)))
+
+    if sx < 1e-9 or sy < 1e-9:
+        # Zero variance — SHAP values or drops are all equal → treat as perfect
+        return 1.0
+
+    return cov / (sx * sy)
 
 
 # ---------------------------------------------------------------------------
@@ -130,75 +131,59 @@ def compute_faithfulness(
 
     logger.debug("Faithfulness baseline confidence: %.4f", base_conf)
 
-    # ── Modality-level importance (aggregate EEG+GSR back into physio) ────
-    # We mask at the modality level (physio vs video) since that's the
-    # granularity of the fusion gate.
-    physio_importance = feature_imp["EEG"] + feature_imp["GSR"]
-    video_importance  = feature_imp["video"]
+    # ── 3-signal importance: EEG, GSR, Video ─────────────────────────────
+    # Treat all three signals independently — gives 3 data points for
+    # a meaningful Spearman correlation (vs. only 2 with physio+video).
+    #
+    # Masking strategy:
+    #   EEG   → physio marginal contribution × EEG quality share
+    #   GSR   → physio marginal contribution × GSR quality share
+    #   Video → replace video_probs with background mean
+    #
+    # The physio marginal = v(full) - v(video_only), split proportionally
+    # by quality weights (same logic used to split phi_physio in kernel_shap).
 
-    modality_importances: List[Tuple[str, float]] = [
-        ("physio", physio_importance),
-        ("video",  video_importance),
+    coalition_values = shap_result.get("coalition_values", {})
+    v_full   = coalition_values.get("full",   base_conf)
+    v_video  = coalition_values.get("video",  base_conf)
+    v_physio = coalition_values.get("physio", base_conf)
+
+    physio_marginal = v_full - v_video   # impact of adding physio
+    video_marginal  = v_full - v_physio  # impact of adding video
+
+    w_eeg = _QUALITY_WEIGHT.get(eeg_quality, 0.1)
+    w_gsr = _QUALITY_WEIGHT.get(gsr_quality, 0.1)
+    w_total = w_eeg + w_gsr if (w_eeg + w_gsr) > 1e-9 else 1.0
+
+    eeg_drop   = physio_marginal * (w_eeg / w_total)
+    gsr_drop   = physio_marginal * (w_gsr / w_total)
+    video_drop = video_marginal
+
+    signal_importances: List[Tuple[str, float]] = [
+        ("EEG",   feature_imp.get("EEG",   0.0)),
+        ("GSR",   feature_imp.get("GSR",   0.0)),
+        ("video", feature_imp.get("video", 0.0)),
     ]
+    confidence_drops = [eeg_drop, gsr_drop, video_drop]
 
-    # Sort by importance descending (highest SHAP first)
-    modality_importances.sort(key=lambda x: -x[1])
-    shap_ranks = list(range(1, len(modality_importances) + 1))
+    logger.debug(
+        "3-signal drops — EEG: %.4f  GSR: %.4f  Video: %.4f",
+        eeg_drop, gsr_drop, video_drop,
+    )
 
-    # ── Progressive masking ────────────────────────────────────────────────
-    # Start from full prediction; mask one modality at a time.
-    confidence_drops: List[float] = []
-
-    current_physio = physio_probs
-    current_video  = video_probs
-    current_pq     = physio_quality
-    current_vq     = video_quality
-
-    for rank, (modality, importance) in enumerate(modality_importances):
-        if modality == "physio":
-            masked_physio = bg_physio
-            masked_video  = current_video
-            masked_pq     = "good"   # background treated as 'good'
-            masked_vq     = current_vq
-        else:
-            masked_physio = current_physio
-            masked_video  = bg_video
-            masked_pq     = current_pq
-            masked_vq     = "good"
-
-        masked_fused = _weighted_fuse(
-            masked_physio, masked_video, masked_pq, masked_vq
-        )
-        masked_conf = masked_fused[target_emotion]
-        drop = base_conf - masked_conf
-        confidence_drops.append(drop)
-
-        logger.debug(
-            "  Mask step %d: modality=%s  conf_after=%.4f  drop=%.4f",
-            rank, modality, masked_conf, drop,
-        )
-
-        # Update current state for next step (cumulative masking)
-        current_physio = masked_physio
-        current_video  = masked_video
-        current_pq     = masked_pq
-        current_vq     = masked_vq
-
-    # ── Spearman correlation ───────────────────────────────────────────────
-    # shap_ranks is already [1, 2, ...] (ordered by importance)
-    # We want to check: do higher SHAP ranks correlate with higher drops?
-    raw_spearman = _spearman(
-        [imp for _, imp in modality_importances],
+    raw_pearson = _pearson(
+        [imp for _, imp in signal_importances],
         confidence_drops,
     )
 
-    # Clamp to [0, 1] — negative correlations are treated as 0 faithfulness
-    faithfulness_score = max(0.0, min(1.0, raw_spearman))
+    # Clamp to [0, 1] — negative correlations mean SHAP order contradicts
+    # the actual drop order, treated as 0 faithfulness
+    faithfulness_score = max(0.0, min(1.0, raw_pearson))
 
     logger.info(
-        "Faithfulness score: %.4f (Spearman=%.4f)  %s",
+        "Faithfulness score: %.4f (Pearson=%.4f)  %s",
         faithfulness_score,
-        raw_spearman,
+        raw_pearson,
         "✓ acceptable" if faithfulness_score >= 0.7 else "⚠ below threshold",
     )
 

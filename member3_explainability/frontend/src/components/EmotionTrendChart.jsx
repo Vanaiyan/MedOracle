@@ -24,7 +24,7 @@ function CustomTooltip({ active, payload, label }) {
       fontSize: 13,
     }}>
       <p style={{ color: 'var(--text-secondary)', marginBottom: 6, fontSize: 11 }}>{label}</p>
-      {payload.map(p => (
+      {payload.map(p => p.value != null && (
         <div key={p.name} style={{ color: p.color, fontWeight: 600, marginBottom: 2 }}>
           {p.name}: {(p.value * 100).toFixed(1)}%
         </div>
@@ -42,7 +42,9 @@ export default function EmotionTrendChart({ trend = [] }) {
   const data = trend.map((t, i) => ({
     name: `S${i + 1}`,
     'Fused': t.fused_confidence,
-    'Physio': t.physio_confidence,
+    'EEG':   t.eeg_confidence,
+    'GSR':   t.gsr_confidence,
+    'Video': t.video_confidence,
     predicted_emotion: t.predicted_emotion,
     timestamp: new Date(t.timestamp).toLocaleDateString(),
   }));
@@ -92,12 +94,30 @@ export default function EmotionTrendChart({ trend = [] }) {
             />
             <Line
               type="monotone"
-              dataKey="Physio"
+              dataKey="EEG"
               stroke="#b794f4"
               strokeWidth={2}
               strokeDasharray="5 3"
               dot={{ fill: '#b794f4', r: 3, strokeWidth: 0 }}
               activeDot={{ r: 5, fill: '#b794f4' }}
+            />
+            <Line
+              type="monotone"
+              dataKey="GSR"
+              stroke="#f6ad55"
+              strokeWidth={2}
+              strokeDasharray="3 3"
+              dot={{ fill: '#f6ad55', r: 3, strokeWidth: 0 }}
+              activeDot={{ r: 5, fill: '#f6ad55' }}
+            />
+            <Line
+              type="monotone"
+              dataKey="Video"
+              stroke="#68d391"
+              strokeWidth={2}
+              strokeDasharray="4 2"
+              dot={{ fill: '#68d391', r: 3, strokeWidth: 0 }}
+              activeDot={{ r: 5, fill: '#68d391' }}
             />
           </LineChart>
         </ResponsiveContainer>

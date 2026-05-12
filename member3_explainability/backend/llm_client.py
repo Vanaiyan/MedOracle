@@ -3,9 +3,12 @@ member3_explainability/backend/llm_client.py
 =============================================
 SHAP-to-Prompt Bridging — LLM chatbot layer.
 
-Primary  : Anthropic Claude (claude-sonnet-4-5)
-Fallback  : OpenAI GPT-4o
-Fallback2 : Simulated response (if neither API key is set — for offline demo)
+Primary  : Google Gemini 1.5 Flash (free tier — no billing required)
+Fallback : Simulated response (if API key not set or quota exceeded)
+
+Topic restriction: the assistant ONLY answers questions related to
+emotion recognition, SHAP explainability, EEG/GSR/video signals,
+and the MedOracle session results. Off-topic questions are politely refused.
 
 Privacy note: only anonymised SHAP values and emotion labels are sent
 — NO raw EEG/GSR/video signal data ever leaves the system.
@@ -21,17 +24,38 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are MedOracle's empathetic health insight assistant.
-Your role is to explain emotion recognition results to clinicians and patients
-in clear, accessible language.
+# ---------------------------------------------------------------------------
+# System prompt — defines persona + topic restriction
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """You are MedOracle Assistant, an AI embedded inside a multimodal
+emotion recognition system. Your ONLY purpose is to explain emotion analysis results
+to clinicians and patients.
+
+STRICT TOPIC RESTRICTION — you must ONLY answer questions about:
+- The emotion predicted in this session (stress, calm, happy, sad, angry)
+- SHAP explainability values (what EEG, GSR, and video contributed)
+- Signal quality (EEG, GSR, video) and what it means
+- Physiological signals: EEG (brain electrical activity), GSR (skin conductance)
+- Facial video analysis and what it measures
+- Modality fusion weights and confidence scores
+- Faithfulness scores and what they indicate
+- General emotion science directly relevant to the results shown
+
+If the user asks ANYTHING outside these topics (e.g. general health advice,
+diagnoses, coding, weather, unrelated science, personal questions, etc.),
+you MUST respond with exactly:
+"I can only help with questions about your MedOracle emotion analysis results.
+Please ask me about the emotion detected, SHAP values, signal quality, or
+what the modalities measure."
 
 When explaining results, you MUST:
-1. Always cite the dominant modality (physiological or video) that most strongly
-   influenced the prediction, and explain in lay terms what that modality measures.
-   - Physiological (EEG + GSR): brain electrical activity and skin conductance,
-     which reflect internal arousal and stress responses.
-   - Video (facial expression): visible facial muscle movements that express emotion.
-2. Mention any signal quality caveats if quality is degraded or poor.
+1. Always cite the dominant modality (EEG, GSR, or video facial) that most
+   influenced the prediction, and explain in plain everyday language what it measures.
+   - EEG: brain electrical activity reflecting internal arousal and stress.
+   - GSR: skin conductance response reflecting emotional arousal.
+   - Video: facial muscle movements expressing emotion.
+2. Mention signal quality caveats if quality is degraded or poor.
 3. Use non-clinical, everyday language. Avoid jargon.
 4. Never make diagnostic claims. Do not say 'you have X condition'.
 5. Be empathetic and supportive in tone.
@@ -40,6 +64,44 @@ When explaining results, you MUST:
 7. When answering follow-up questions, directly address what was asked.
    Do NOT repeat the full analysis summary if the user asks a specific question."""
 
+
+# ---------------------------------------------------------------------------
+# Off-topic guard — quick keyword check before calling the LLM
+# ---------------------------------------------------------------------------
+
+_EMOTION_KEYWORDS = {
+    "emotion", "stress", "calm", "happy", "sad", "angry", "fear", "anxiety",
+    "eeg", "gsr", "galvanic", "skin", "brain", "video", "facial", "face",
+    "shap", "modality", "physio", "physiological", "signal", "quality",
+    "confidence", "prediction", "fusion", "weight", "faithfulness",
+    "explain", "analysis", "result", "session", "medoracle", "arousal",
+    "electroencephalography", "conductance", "detection", "recognition",
+    "why", "what", "how", "dominant", "contribute", "reliable", "trust",
+    "interpret", "score", "percentage", "accurate", "feature", "importance",
+}
+
+def _is_on_topic(message: str) -> bool:
+    """
+    Returns True if the message contains at least one emotion/SHAP-related keyword.
+    Short messages (e.g. 'yes', 'ok', 'tell me more') are always allowed
+    as they are follow-ups in an ongoing conversation.
+    """
+    words = message.lower().split()
+    if len(words) <= 4:
+        return True   # Short follow-up — always allow
+    return any(w.strip("?.,!") in _EMOTION_KEYWORDS for w in words)
+
+
+_OFF_TOPIC_REPLY = (
+    "I can only help with questions about your MedOracle emotion analysis results. "
+    "Please ask me about the emotion detected, SHAP values, signal quality, or "
+    "what the modalities measure."
+)
+
+
+# ---------------------------------------------------------------------------
+# Context block builder
+# ---------------------------------------------------------------------------
 
 def _build_context_block(shap_output: dict) -> str:
     sv  = shap_output.get("shap_values", {})
@@ -53,7 +115,10 @@ def _build_context_block(shap_output: dict) -> str:
     video_pred  = pmr.get("video",  {})
 
     dominant_feature  = max(fi, key=fi.get) if fi else "unknown"
-    dominant_modality = "physiological (EEG + GSR)" if dominant_feature in ("EEG", "GSR") else "facial video"
+    dominant_modality = (
+        "physiological (EEG + GSR)" if dominant_feature in ("EEG", "GSR")
+        else "facial video"
+    )
 
     lines = [
         "=== MedOracle Analysis Results ===",
@@ -81,8 +146,10 @@ def _build_context_block(shap_output: dict) -> str:
         f"  Video : {sq.get('video', 'unknown')}",
         "",
         "--- Per-Modality Predictions ---",
-        f"  Physiological alone : {physio_pred.get('predicted_emotion','?')} ({physio_pred.get('confidence', 0):.1%} confidence)",
-        f"  Video alone         : {video_pred.get('predicted_emotion','?')} ({video_pred.get('confidence', 0):.1%} confidence)",
+        f"  Physiological alone : {physio_pred.get('predicted_emotion','?')} "
+        f"({physio_pred.get('confidence', 0):.1%} confidence)",
+        f"  Video alone         : {video_pred.get('predicted_emotion','?')} "
+        f"({video_pred.get('confidence', 0):.1%} confidence)",
         "",
         f"Explanation faithfulness score : {fs} (>=0.7 is acceptable)",
         "===================================",
@@ -90,46 +157,51 @@ def _build_context_block(shap_output: dict) -> str:
     return "\n".join(lines)
 
 
-async def _call_claude(messages: List[dict], system: str) -> str:
+# ---------------------------------------------------------------------------
+# Gemini call (free tier)
+# ---------------------------------------------------------------------------
+
+async def _call_gemini(messages: List[dict], system: str, context_block: str) -> str:
+    """Call Google Gemini 1.5 Flash (free tier)."""
     try:
-        import anthropic
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        import google.generativeai as genai
+
+        api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set")
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=512,
-            system=system,
-            messages=messages,
+            raise RuntimeError("GEMINI_API_KEY not set")
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=system,
         )
-        return response.content[0].text.strip()
+
+        # Build the full contents list for generate_content_async
+        # Gemini uses 'user' and 'model' roles (not 'assistant')
+        contents = []
+        for msg in messages:
+            role = "model" if msg["role"] == "assistant" else "user"
+            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+        response = await model.generate_content_async(contents)
+        return response.text.strip()
+
     except Exception as exc:
-        logger.warning("Claude call failed: %s", exc)
+        logger.warning("Gemini call failed: %s", exc)
         raise
 
 
-async def _call_openai(messages: List[dict], system: str) -> str:
-    try:
-        from openai import AsyncOpenAI
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY not set")
-        client = AsyncOpenAI(api_key=api_key)
-        full_messages = [{"role": "system", "content": system}] + messages
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=full_messages,
-            max_tokens=512,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as exc:
-        logger.warning("OpenAI call failed: %s", exc)
-        raise
-
+# ---------------------------------------------------------------------------
+# Simulated fallback (no API key needed)
+# ---------------------------------------------------------------------------
 
 def _simulated_response(shap_output: dict, user_message: str) -> str:
-    """Offline fallback — generates varied responses based on user question."""
+    """Offline fallback — generates varied responses based on user question.
+
+    Conditions are ordered from MOST SPECIFIC to LEAST SPECIFIC so that
+    a question like "Why is EEG lower than GSR?" is caught by the cross-modality
+    comparison branch before the generic "why" branch fires.
+    """
     emotion  = shap_output.get("predicted_emotion", "unknown")
     conf     = shap_output.get("confidence", 0.0)
     fi       = shap_output.get("feature_importance", {})
@@ -146,6 +218,16 @@ def _simulated_response(shap_output: dict, user_message: str) -> str:
     physio_w = mw.get("physio", 0.5)
     video_w  = mw.get("video",  0.5)
 
+    eeg_fi = fi.get("EEG",   0.0)
+    gsr_fi = fi.get("GSR",   0.0)
+    vid_fi = fi.get("video", 0.0)
+
+    # Rank modalities by importance for comparison responses
+    ranked = sorted(
+        [("EEG", eeg_fi), ("GSR", gsr_fi), ("Video/Facial", vid_fi)],
+        key=lambda x: x[1], reverse=True,
+    )
+
     quality_note = ""
     degraded = [k for k, v in sq.items() if v in ("degraded", "poor")]
     if degraded:
@@ -156,7 +238,42 @@ def _simulated_response(shap_output: dict, user_message: str) -> str:
 
     msg_lower = user_message.lower()
 
-    # Answer specific questions differently
+    # Pre-compute which modalities the user is asking about
+    has_eeg = any(w in msg_lower for w in ["eeg", "brain", "electrical"])
+    has_gsr = any(w in msg_lower for w in ["gsr", "skin", "conductance", "galvanic"])
+    has_vid = any(w in msg_lower for w in ["video", "face", "facial", "camera"])
+    modalities_mentioned = sum([has_eeg, has_gsr, has_vid])
+
+    # ── 1. Cross-modality comparison (most specific — check BEFORE "why") ──
+    # e.g. "Why is EEG lower than GSR?", "EEG vs GSR", "difference between"
+    comparison_words = ["compare", "comparison", "versus", "vs", "difference",
+                        "lower than", "higher than", "more than", "less than",
+                        "bigger", "smaller", "contrast"]
+    if modalities_mentioned >= 2 or any(w in msg_lower for w in comparison_words):
+        return (
+            f"Here is how each signal contributed to the {emotion} prediction:\n"
+            f"  {ranked[0][0]}: {ranked[0][1]:.4f}  ← highest (most influential)\n"
+            f"  {ranked[1][0]}: {ranked[1][1]:.4f}\n"
+            f"  {ranked[2][0]}: {ranked[2][1]:.4f}  ← lowest influence\n"
+            f"The difference reflects both the signal quality and how strongly each "
+            f"modality's pattern matched the {emotion} state.{quality_note}"
+        )
+
+    # ── 2. Which modality contributes most / dominates ──────────────────────
+    # e.g. "which modality contributes the most", "what is the dominant signal"
+    if any(w in msg_lower for w in ["which", "most", "highest", "dominant",
+                                     "biggest", "largest", "top", "contributes",
+                                     "contribute", "mainly", "primarily"]):
+        return (
+            f"The most influential signal was {dom_label}, "
+            f"with a SHAP importance score of {fi.get(dominant, 0.0):.4f}. "
+            f"The full ranking was: "
+            f"{ranked[0][0]} ({ranked[0][1]:.4f}) > "
+            f"{ranked[1][0]} ({ranked[1][1]:.4f}) > "
+            f"{ranked[2][0]} ({ranked[2][1]:.4f}).{quality_note}"
+        )
+
+    # ── 3. Why / reason (generic causal question) ────────────────────────────
     if any(w in msg_lower for w in ["why", "reason", "how come", "what caused"]):
         return (
             f"The {emotion} prediction was primarily driven by {dom_label}, "
@@ -164,41 +281,52 @@ def _simulated_response(shap_output: dict, user_message: str) -> str:
             f"The SHAP analysis assigned it the highest feature importance score "
             f"among all three signals (EEG, GSR, video).{quality_note}"
         )
-    elif any(w in msg_lower for w in ["confidence", "sure", "certain", "accurate"]):
+
+    # ── 4. Confidence / certainty ────────────────────────────────────────────
+    elif any(w in msg_lower for w in ["confidence", "sure", "certain", "accurate",
+                                       "percent", "%", "77", "reliable"]):
         return (
             f"The system is {conf:.0%} confident in the {emotion} prediction. "
             f"This confidence is calculated from the fused probability distribution "
             f"across all five emotion classes. "
             f"A score above 70% is generally considered reliable.{quality_note}"
         )
-    elif any(w in msg_lower for w in ["eeg", "brain", "electrical"]):
+
+    # ── 5. Single-modality questions ─────────────────────────────────────────
+    elif has_eeg:
         return (
             f"EEG (electroencephalography) measures electrical activity in the brain. "
-            f"In this session, EEG had a SHAP importance score of {fi.get('EEG', 0):.4f}, "
+            f"In this session, EEG had a SHAP importance of {eeg_fi:.4f}, "
             f"making it {'the dominant' if dominant == 'EEG' else 'a secondary'} signal. "
             f"Brain activity patterns in specific frequency bands (alpha, beta, theta) "
             f"are strongly linked to emotional arousal and valence."
         )
-    elif any(w in msg_lower for w in ["gsr", "skin", "conductance"]):
+    elif has_gsr:
         return (
-            f"GSR (galvanic skin response) measures how much your skin conducts electricity, "
-            f"which increases with emotional arousal and stress. "
-            f"In this session, GSR had a SHAP importance of {fi.get('GSR', 0):.4f}. "
-            f"It was weighted at {physio_w:.0%} combined with EEG in the physiological modality.{quality_note}"
+            f"GSR (galvanic skin response) measures how much your skin conducts "
+            f"electricity, which increases with emotional arousal and stress. "
+            f"In this session, GSR had a SHAP importance of {gsr_fi:.4f}. "
+            f"It is weighted at {physio_w:.0%} combined with EEG in the "
+            f"physiological modality.{quality_note}"
         )
-    elif any(w in msg_lower for w in ["video", "face", "facial", "camera"]):
+    elif has_vid:
         return (
-            f"The video modality analyzes facial muscle movements captured by camera. "
-            f"In this session, video had a SHAP importance of {fi.get('video', 0):.4f} "
+            f"The video modality analyses facial muscle movements captured by camera. "
+            f"In this session, video had a SHAP importance of {vid_fi:.4f} "
             f"and was weighted at {video_w:.0%} in the final fusion. "
             f"{'It was the dominant signal.' if dominant == 'video' else 'The physiological signals were more influential this time.'}{quality_note}"
         )
-    elif any(w in msg_lower for w in ["quality", "signal", "reliable", "trust"]):
+
+    # ── 6. Signal quality ────────────────────────────────────────────────────
+    elif any(w in msg_lower for w in ["quality", "signal", "trust", "noise"]):
         if degraded:
             return (
-                f"The {', '.join(degraded)} signal(s) had degraded or poor quality during this session. "
-                f"This means the system automatically reduced their influence in the final prediction. "
-                f"For more reliable results, ensure sensors are properly attached and the face is clearly visible."
+                f"The {', '.join(degraded)} signal(s) had degraded or poor quality "
+                f"during this session. "
+                f"This means the system automatically reduced their influence in the "
+                f"final prediction. "
+                f"For more reliable results, ensure sensors are properly attached "
+                f"and the face is clearly visible."
             )
         else:
             return (
@@ -206,20 +334,25 @@ def _simulated_response(shap_output: dict, user_message: str) -> str:
                 f"This means the {emotion} prediction is based on clean, reliable data "
                 f"and can be interpreted with higher confidence."
             )
-    elif any(w in msg_lower for w in ["shap", "explain", "interpret", "faithfulness"]):
+
+    # ── 7. SHAP / explanation overview ───────────────────────────────────────
+    elif any(w in msg_lower for w in ["shap", "explain", "interpret", "faithfulness",
+                                       "result", "results", "overview", "summary"]):
         fs = shap_output.get("faithfulness_score", 0)
         return (
             f"SHAP (SHapley Additive exPlanations) measures how much each signal "
             f"contributed to the final prediction. "
-            f"The faithfulness score of {fs:.2f} {'confirms' if fs >= 0.7 else 'suggests'} "
-            f"that these explanations {'genuinely reflect' if fs >= 0.7 else 'may not fully reflect'} "
+            f"The faithfulness score of {fs:.2f} "
+            f"{'confirms' if fs >= 0.7 else 'suggests'} that these explanations "
+            f"{'genuinely reflect' if fs >= 0.7 else 'may not fully reflect'} "
             f"the model's decision-making. "
             f"The dominant contributor was {dom_label}."
         )
+
+    # ── 8. Catch-all ─────────────────────────────────────────────────────────
     else:
-        # Default auto-explanation
         return (
-            f"The system detected **{emotion}** with {conf:.0%} confidence. "
+            f"The system detected {emotion} with {conf:.0%} confidence. "
             f"The most influential signal was {dom_label}. "
             f"Physiological sensors were weighted at {physio_w:.0%} "
             f"and facial video at {video_w:.0%}.{quality_note} "
@@ -228,14 +361,22 @@ def _simulated_response(shap_output: dict, user_message: str) -> str:
         )
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 async def get_llm_response(
     shap_output: dict,
     user_message: str,
     conversation_history: Optional[List[dict]] = None,
 ) -> str:
+    # ── 1. Off-topic guard ────────────────────────────────────────────────
+    if not _is_on_topic(user_message):
+        return _OFF_TOPIC_REPLY
+
     context_block = _build_context_block(shap_output)
 
-    # Build messages — context always injected in first user message
+    # ── 2. Build message list ─────────────────────────────────────────────
     if not conversation_history:
         messages = [
             {
@@ -248,27 +389,26 @@ async def get_llm_response(
         ]
     else:
         messages = list(conversation_history)
-        # Ensure context is in the first message
+        # Inject context into the first message if not already there
         first = messages[0]
         if context_block not in first.get("content", ""):
             messages[0] = {
                 **first,
-                "content": f"Here are the MedOracle analysis results:\n\n{context_block}\n\n{first['content']}",
+                "content": (
+                    f"Here are the MedOracle analysis results:\n\n{context_block}\n\n"
+                    f"{first['content']}"
+                ),
             }
-        # Add current user message
         messages.append({"role": "user", "content": user_message})
 
+    # ── 3. Try Gemini (free) ──────────────────────────────────────────────
     try:
-        return await _call_claude(messages, _SYSTEM_PROMPT)
+        return await _call_gemini(messages, _SYSTEM_PROMPT, context_block)
     except Exception:
         pass
 
-    try:
-        return await _call_openai(messages, _SYSTEM_PROMPT)
-    except Exception:
-        pass
-
-    logger.info("Using simulated LLM response (no API keys configured).")
+    # ── 4. Simulated fallback ─────────────────────────────────────────────
+    logger.info("Using simulated LLM response (Gemini unavailable).")
     return _simulated_response(shap_output, user_message)
 
 
