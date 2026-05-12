@@ -176,9 +176,11 @@ class DEAPLoader:
         subj_data = SubjectData(subject_id=subj_id)
 
         for trial_idx in range(data_trimmed.shape[0]):
-            v = float(labels[trial_idx, 0])   # Valence
-            a = float(labels[trial_idx, 1])   # Arousal
-            d = float(labels[trial_idx, 2])   # Dominance
+
+            # Clamp to [1, 9] — a few DEAP trials have 0 ratings (data artifact)
+            v = float(np.clip(labels[trial_idx, 0], 1.0, 9.0))   # Valence
+            a = float(np.clip(labels[trial_idx, 1], 1.0, 9.0))   # Arousal
+            d = float(np.clip(labels[trial_idx, 2], 1.0, 9.0))   # Dominance
 
             # --- Label harmonization ---
             emotion_str = map_deap_to_class(v, a, d)
