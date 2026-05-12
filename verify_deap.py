@@ -8,7 +8,7 @@ def verify_deap_file(file_path):
     with open(file_path, 'rb') as f:
         data = pickle.load(f, encoding='latin1')
 
-    print(f"✅ Keys found: {list(data.keys())}")
+    print(f"Keys found: {list(data.keys())}")
 
     d = data['data']
     labels = data['labels']
@@ -81,6 +81,7 @@ if __name__ == "__main__":
 
 
 """
+command : $ python verify_deap.py
 Issue 1 — Labels minimum is 0, not 1
 Issue 2 — GSR values are NOT in µS
 """
