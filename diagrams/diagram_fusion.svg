@@ -1,0 +1,116 @@
+<svg viewBox="0 0 860 480" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif">
+  <text x="430" y="26" text-anchor="middle" font-size="14" font-weight="bold">Figure 5.4: Confidence-Weighted Gated Fusion Algorithm</text>
+
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#333"/>
+    </marker>
+    <marker id="arrd" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#6f42c1"/>
+    </marker>
+  </defs>
+
+  <!-- Physio input -->
+  <rect x="30" y="55" width="155" height="75" rx="6" fill="#d4edda" stroke="#28a745" stroke-width="2"/>
+  <text x="107" y="75" text-anchor="middle" font-size="11" font-weight="bold">Physiological Module</text>
+  <text x="107" y="91" text-anchor="middle" font-size="10">P_physio = {p_stress, p_calm,</text>
+  <text x="107" y="105" text-anchor="middle" font-size="10">  p_happy, p_sad, p_angry}</text>
+  <text x="107" y="120" text-anchor="middle" font-size="10">quality_eeg, quality_gsr</text>
+
+  <!-- Video input -->
+  <rect x="30" y="165" width="155" height="60" rx="6" fill="#cce5ff" stroke="#004085" stroke-width="2"/>
+  <text x="107" y="185" text-anchor="middle" font-size="11" font-weight="bold">Video Module</text>
+  <text x="107" y="201" text-anchor="middle" font-size="10">P_video = {p_stress, p_calm,</text>
+  <text x="107" y="215" text-anchor="middle" font-size="10">  p_happy, p_sad, p_angry}</text>
+
+  <!-- Arrow physio → entropy -->
+  <line x1="185" y1="93" x2="215" y2="93" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+  <!-- Arrow video → entropy -->
+  <line x1="185" y1="195" x2="215" y2="195" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- Step 1: Entropy confidence -->
+  <rect x="215" y="58" width="175" height="172" rx="6" fill="#fff3cd" stroke="#f0ad4e" stroke-width="2"/>
+  <text x="302" y="78" text-anchor="middle" font-size="11" font-weight="bold">Step 1: Confidence Score</text>
+  <line x1="215" y1="84" x2="390" y2="84" stroke="#f0ad4e" stroke-width="1"/>
+  <text x="302" y="104" text-anchor="middle" font-size="10" font-style="italic">c_m = 1 − H(P_m) / log(K)</text>
+  <text x="302" y="120" text-anchor="middle" font-size="9">H(P) = −Σ pₖ · log(pₖ)</text>
+  <text x="302" y="134" text-anchor="middle" font-size="9">K = 5 (emotion classes)</text>
+  <line x1="215" y1="145" x2="390" y2="145" stroke="#f0ad4e" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="302" y="162" text-anchor="middle" font-size="10">c = 1.0 → perfect certainty</text>
+  <text x="302" y="176" text-anchor="middle" font-size="10">c = 0.0 → uniform uncertainty</text>
+  <text x="302" y="190" text-anchor="middle" font-size="9" fill="#555">Guo et al. (2017) — calibrated</text>
+  <text x="302" y="207" text-anchor="middle" font-size="9" fill="#555">confidence measure</text>
+  <text x="302" y="222" text-anchor="middle" font-size="10">→ c_physio, c_video</text>
+
+  <!-- Arrow step 1 → step 2 -->
+  <line x1="390" y1="144" x2="420" y2="144" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- Step 2: Quality penalty -->
+  <rect x="420" y="55" width="175" height="185" rx="6" fill="#f8d7da" stroke="#c0392b" stroke-width="2"/>
+  <text x="507" y="75" text-anchor="middle" font-size="11" font-weight="bold">Step 2: Quality Penalty</text>
+  <line x1="420" y1="81" x2="595" y2="81" stroke="#c0392b" stroke-width="1"/>
+  <text x="507" y="100" text-anchor="middle" font-size="10">α_m = quality penalty factor</text>
+  <rect x="435" y="110" width="145" height="80" rx="4" fill="white" stroke="#c0392b" stroke-width="1"/>
+  <text x="507" y="127" text-anchor="middle" font-size="10" font-weight="bold">quality → α</text>
+  <text x="507" y="143" text-anchor="middle" font-size="10">"good"     →  1.0</text>
+  <text x="507" y="157" text-anchor="middle" font-size="10">"degraded" →  0.5</text>
+  <text x="507" y="171" text-anchor="middle" font-size="10">"poor"     →  0.1</text>
+  <text x="507" y="189" text-anchor="middle" font-size="9" fill="#555">Applied per modality</text>
+  <text x="507" y="206" text-anchor="middle" font-size="9" fill="#555">using worst signal grade</text>
+  <text x="507" y="224" text-anchor="middle" font-size="10">→ α_physio, α_video</text>
+
+  <!-- Arrow step 2 → step 3 -->
+  <line x1="595" y1="144" x2="625" y2="144" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- Step 3: Gate scores + L1 norm -->
+  <rect x="625" y="55" width="215" height="185" rx="6" fill="#e2d9f3" stroke="#6f42c1" stroke-width="2"/>
+  <text x="732" y="75" text-anchor="middle" font-size="11" font-weight="bold">Step 3: Gate Scores &amp; Weights</text>
+  <line x1="625" y1="81" x2="840" y2="81" stroke="#6f42c1" stroke-width="1"/>
+  <text x="732" y="102" text-anchor="middle" font-size="10" font-style="italic">g_m = c_m × α_m</text>
+  <line x1="625" y1="115" x2="840" y2="115" stroke="#6f42c1" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="732" y="133" text-anchor="middle" font-size="10" font-weight="bold">L1 Normalisation</text>
+  <text x="732" y="149" text-anchor="middle" font-size="10" font-style="italic">w_m = g_m / Σ g_m</text>
+  <text x="732" y="167" text-anchor="middle" font-size="9" fill="#555">Not softmax — preserves extreme</text>
+  <text x="732" y="180" text-anchor="middle" font-size="9" fill="#555">confidence differences</text>
+  <line x1="625" y1="192" x2="840" y2="192" stroke="#6f42c1" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="732" y="210" text-anchor="middle" font-size="10">→ w_physio + w_video = 1.0</text>
+  <text x="732" y="225" text-anchor="middle" font-size="10">→ w_physio, w_video</text>
+
+  <!-- Fusion output box -->
+  <rect x="295" y="300" width="270" height="80" rx="8" fill="#2c7bb6" stroke="#1a5276" stroke-width="2.5"/>
+  <text x="430" y="324" text-anchor="middle" font-size="13" fill="white" font-weight="bold">Fused Prediction</text>
+  <text x="430" y="344" text-anchor="middle" font-size="11" fill="white" font-style="italic">P_fused = w_physio × P_physio + w_video × P_video</text>
+  <text x="430" y="364" text-anchor="middle" font-size="11" fill="white">predicted_emotion = argmax(P_fused)</text>
+
+  <!-- Arrows from step 3 down to fusion -->
+  <line x1="732" y1="240" x2="732" y2="280" stroke="#6f42c1" stroke-width="1.8"/>
+  <line x1="302" y1="230" x2="302" y2="280" stroke="#28a745" stroke-width="1.8" stroke-dasharray="5,3"/>
+  <line x1="302" y1="280" x2="732" y2="280" stroke="#333" stroke-width="1.8"/>
+  <line x1="430" y1="280" x2="430" y2="300" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="430" y="275" text-anchor="middle" font-size="9">(w_physio, w_video, P_physio, P_video)</text>
+
+  <!-- Graceful degradation note -->
+  <rect x="30" y="300" width="240" height="100" rx="6" fill="#f8f9fa" stroke="#6c757d" stroke-width="1.5"/>
+  <text x="150" y="320" text-anchor="middle" font-size="11" font-weight="bold">Graceful Degradation Rules</text>
+  <text x="150" y="338" text-anchor="middle" font-size="9">Both modalities: full gated fusion</text>
+  <text x="150" y="352" text-anchor="middle" font-size="9">Video poor/missing: w_video → 0</text>
+  <text x="150" y="366" text-anchor="middle" font-size="9">Physio poor/missing: w_physio → 0</text>
+  <text x="150" y="380" text-anchor="middle" font-size="9">Both poor: uniform (0.2 per class)</text>
+  <text x="150" y="394" text-anchor="middle" font-size="9">        + flagged as unreliable</text>
+
+  <!-- Arrow from degradation to fusion -->
+  <line x1="270" y1="340" x2="295" y2="340" stroke="#6c757d" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+
+  <!-- Final prediction_output -->
+  <rect x="590" y="300" width="250" height="100" rx="6" fill="#d4edda" stroke="#28a745" stroke-width="1.5"/>
+  <text x="715" y="320" text-anchor="middle" font-size="11" font-weight="bold">prediction_output dict</text>
+  <text x="715" y="337" text-anchor="middle" font-size="9">predicted_emotion, confidence</text>
+  <text x="715" y="351" text-anchor="middle" font-size="9">class_probabilities (5-class)</text>
+  <text x="715" y="365" text-anchor="middle" font-size="9">modality_weights {physio, video}</text>
+  <text x="715" y="379" text-anchor="middle" font-size="9">signal_quality {eeg, gsr, video}</text>
+  <text x="715" y="393" text-anchor="middle" font-size="9">per_modality_predictions</text>
+  <line x1="565" y1="340" x2="590" y2="340" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- Caption -->
+  <text x="430" y="435" text-anchor="middle" font-size="10" fill="#555" font-style="italic">All three steps execute per inference call. L1 normalisation preserves extreme confidence differences that softmax would compress.</text>
+</svg>

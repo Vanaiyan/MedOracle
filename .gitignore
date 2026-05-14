@@ -60,3 +60,6 @@ shap_cache/
 
 data/DEAP/
 data/CREMA-D/
+
+*.zip
+data/CREMA-D/

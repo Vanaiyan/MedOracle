@@ -1,0 +1,119 @@
+<svg viewBox="0 0 820 460" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif">
+  <text x="410" y="26" text-anchor="middle" font-size="14" font-weight="bold">Figure 4.2: Physiological Module Architecture — Bidirectional Cross-Modal Attention Network</text>
+
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#333"/>
+    </marker>
+    <marker id="arrg" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#28a745"/>
+    </marker>
+    <marker id="arro" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e67e22"/>
+    </marker>
+    <marker id="arrp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#6f42c1"/>
+    </marker>
+  </defs>
+
+  <!-- ── INPUTS ── -->
+  <!-- EEG Input -->
+  <rect x="30" y="55" width="140" height="60" rx="6" fill="#d4edda" stroke="#28a745" stroke-width="2"/>
+  <text x="100" y="78" text-anchor="middle" font-size="12" font-weight="bold" fill="#155724">EEG Input</text>
+  <text x="100" y="94" text-anchor="middle" font-size="10">(32 channels)</text>
+  <text x="100" y="108" text-anchor="middle" font-size="10">512 samples @ 128 Hz</text>
+
+  <!-- GSR Input -->
+  <rect x="30" y="155" width="140" height="60" rx="6" fill="#ffe8cc" stroke="#e67e22" stroke-width="2"/>
+  <text x="100" y="178" text-anchor="middle" font-size="12" font-weight="bold" fill="#7d4900">GSR Input</text>
+  <text x="100" y="194" text-anchor="middle" font-size="10">(1 channel)</text>
+  <text x="100" y="208" text-anchor="middle" font-size="10">512 samples (resampled)</text>
+
+  <!-- ── PREPROCESSING ── -->
+  <rect x="210" y="55" width="140" height="60" rx="5" fill="#d4edda" stroke="#28a745" stroke-width="1.5"/>
+  <text x="280" y="76" text-anchor="middle" font-size="11" font-weight="bold">EEG Preprocessing</text>
+  <text x="280" y="91" text-anchor="middle" font-size="10">Bandpass 0.5–45 Hz</text>
+  <text x="280" y="105" text-anchor="middle" font-size="10">ICA artifact removal</text>
+
+  <rect x="210" y="155" width="140" height="60" rx="5" fill="#ffe8cc" stroke="#e67e22" stroke-width="1.5"/>
+  <text x="280" y="176" text-anchor="middle" font-size="11" font-weight="bold">GSR Preprocessing</text>
+  <text x="280" y="191" text-anchor="middle" font-size="10">Lowpass filter</text>
+  <text x="280" y="206" text-anchor="middle" font-size="10">Polyphase resample</text>
+
+  <!-- Arrows input → preprocess -->
+  <line x1="170" y1="85" x2="210" y2="85" stroke="#28a745" stroke-width="1.8" marker-end="url(#arrg)"/>
+  <line x1="170" y1="185" x2="210" y2="185" stroke="#e67e22" stroke-width="1.8" marker-end="url(#arro)"/>
+
+  <!-- ── FEATURE EXTRACTION ── -->
+  <rect x="390" y="55" width="145" height="60" rx="5" fill="#d4edda" stroke="#28a745" stroke-width="1.5"/>
+  <text x="462" y="76" text-anchor="middle" font-size="11" font-weight="bold">EEG Features</text>
+  <text x="462" y="92" text-anchor="middle" font-size="10">Time-domain + Freq-domain</text>
+  <text x="462" y="107" text-anchor="middle" font-size="10">Alpha, Beta, Gamma bands</text>
+
+  <rect x="390" y="155" width="145" height="60" rx="5" fill="#ffe8cc" stroke="#e67e22" stroke-width="1.5"/>
+  <text x="462" y="176" text-anchor="middle" font-size="11" font-weight="bold">GSR Features</text>
+  <text x="462" y="192" text-anchor="middle" font-size="10">SCR peaks, Tonic level</text>
+  <text x="462" y="207" text-anchor="middle" font-size="10">Signal slope, variance</text>
+
+  <!-- Arrows preprocess → features -->
+  <line x1="350" y1="85" x2="390" y2="85" stroke="#28a745" stroke-width="1.8" marker-end="url(#arrg)"/>
+  <line x1="350" y1="185" x2="390" y2="185" stroke="#e67e22" stroke-width="1.8" marker-end="url(#arro)"/>
+
+  <!-- ── CROSS-MODAL ATTENTION ── -->
+  <rect x="575" y="50" width="200" height="180" rx="8" fill="#e2d9f3" stroke="#6f42c1" stroke-width="2.5"/>
+  <text x="675" y="72" text-anchor="middle" font-size="12" font-weight="bold" fill="#4a235a">Bidirectional</text>
+  <text x="675" y="88" text-anchor="middle" font-size="12" font-weight="bold" fill="#4a235a">Cross-Modal Attention</text>
+  <line x1="575" y1="96" x2="775" y2="96" stroke="#6f42c1" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <!-- EEG attends to GSR -->
+  <rect x="590" y="106" width="170" height="48" rx="5" fill="#d4edda" stroke="#28a745" stroke-width="1.5"/>
+  <text x="675" y="124" text-anchor="middle" font-size="10" font-weight="bold">EEG → attends to → GSR</text>
+  <text x="675" y="138" text-anchor="middle" font-size="9">Query: EEG features</text>
+  <text x="675" y="150" text-anchor="middle" font-size="9">Key/Value: GSR features</text>
+
+  <!-- GSR attends to EEG -->
+  <rect x="590" y="162" width="170" height="48" rx="5" fill="#ffe8cc" stroke="#e67e22" stroke-width="1.5"/>
+  <text x="675" y="180" text-anchor="middle" font-size="10" font-weight="bold">GSR → attends to → EEG</text>
+  <text x="675" y="194" text-anchor="middle" font-size="9">Query: GSR features</text>
+  <text x="675" y="206" text-anchor="middle" font-size="9">Key/Value: EEG features</text>
+
+  <text x="675" y="222" text-anchor="middle" font-size="9" fill="#4a235a">Outputs concatenated → joint repr.</text>
+
+  <!-- Arrows features → attention -->
+  <line x1="535" y1="85" x2="575" y2="130" stroke="#28a745" stroke-width="1.8" marker-end="url(#arrg)"/>
+  <line x1="535" y1="185" x2="575" y2="185" stroke="#e67e22" stroke-width="1.8" marker-end="url(#arro)"/>
+
+  <!-- ── JOINT CLASSIFIER ── -->
+  <rect x="575" y="270" width="200" height="70" rx="6" fill="#cce5ff" stroke="#004085" stroke-width="2"/>
+  <text x="675" y="293" text-anchor="middle" font-size="12" font-weight="bold" fill="#004085">Joint Classifier</text>
+  <text x="675" y="310" text-anchor="middle" font-size="10">FC layers + Softmax</text>
+  <text x="675" y="325" text-anchor="middle" font-size="10">→ 5-class probabilities</text>
+  <line x1="675" y1="230" x2="675" y2="270" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- ── SIGNAL QUALITY ── -->
+  <rect x="390" y="270" width="160" height="70" rx="5" fill="#fff3cd" stroke="#f0ad4e" stroke-width="1.5"/>
+  <text x="470" y="292" text-anchor="middle" font-size="11" font-weight="bold">Signal Quality</text>
+  <text x="470" y="308" text-anchor="middle" font-size="10">EEG: amplitude, flat-line,</text>
+  <text x="470" y="323" text-anchor="middle" font-size="10">NaN ratio → grade</text>
+  <text x="470" y="337" text-anchor="middle" font-size="10">GSR: range, SCR, drift</text>
+
+  <!-- dashed line from features to quality -->
+  <line x1="462" y1="215" x2="462" y2="270" stroke="#f0ad4e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+
+  <!-- ── OUTPUT ── -->
+  <rect x="200" y="380" width="550" height="60" rx="6" fill="#2c7bb6" stroke="#1a5276" stroke-width="2"/>
+  <text x="475" y="404" text-anchor="middle" font-size="12" fill="white" font-weight="bold">physiological_prediction_dict</text>
+  <text x="475" y="423" text-anchor="middle" font-size="10" fill="white">{ predicted_emotion, confidence, class_probabilities, signal_quality: {eeg, gsr} }</text>
+
+  <!-- Arrows to output -->
+  <line x1="675" y1="340" x2="675" y2="370" stroke="#333" stroke-width="1.8"/>
+  <line x1="470" y1="340" x2="470" y2="370" stroke="#f0ad4e" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <line x1="470" y1="370" x2="675" y2="370" stroke="#333" stroke-width="1.8"/>
+  <line x1="575" y1="370" x2="575" y2="380" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- Training note -->
+  <rect x="30" y="290" width="320" height="55" rx="5" fill="#f8f9fa" stroke="#dee2e6" stroke-width="1"/>
+  <text x="190" y="310" text-anchor="middle" font-size="10" font-weight="bold">Training: DEAP Dataset</text>
+  <text x="190" y="325" text-anchor="middle" font-size="10">LOSO cross-validation (32 folds)</text>
+  <text x="190" y="340" text-anchor="middle" font-size="10">Weighted cross-entropy loss</text>
+</svg>

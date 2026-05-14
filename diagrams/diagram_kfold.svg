@@ -1,0 +1,68 @@
+<svg viewBox="0 0 820 340" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif">
+  <text x="410" y="26" text-anchor="middle" font-size="14" font-weight="bold">Figure 5.5: Actor-Independent 5-Fold GroupKFold — CREMA-D</text>
+
+  <!-- Axis labels -->
+  <text x="100" y="55" text-anchor="middle" font-size="11" font-weight="bold">Fold</text>
+  <text x="410" y="55" text-anchor="middle" font-size="11" font-weight="bold">91 Actors partitioned across folds (zero actor overlap between train and val)</text>
+
+  <defs>
+    <pattern id="hatch" patternUnits="userSpaceOnUse" width="6" height="6">
+      <path d="M0,6 l6,-6 M-1,1 l2,-2 M5,7 l2,-2" stroke="#004085" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- Fold rows -->
+  <!-- Colors: train=light blue, val=darker blue with hatch -->
+  <!-- 91 actors → 5 folds ≈ 18 actors each; train = 4 folds = 73 actors, val = 1 fold = 18 actors -->
+  <!-- Total width for actors: 660px (from x=140 to x=800), 1 actor ≈ 7.25px -->
+
+  <!-- Fold 1 -->
+  <text x="115" y="97" text-anchor="middle" font-size="11" font-weight="bold">Fold 1</text>
+  <!-- val fold 1: actors 1-18 → x=140, width=131 -->
+  <rect x="140" y="75" width="131" height="34" fill="url(#hatch)" stroke="#004085" stroke-width="2"/>
+  <text x="205" y="97" text-anchor="middle" font-size="10" fill="#004085" font-weight="bold">VAL (actors 1–18)</text>
+  <!-- train folds 2-5: actors 19-91 → x=271, width=529 -->
+  <rect x="271" y="75" width="529" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="535" y="97" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (actors 19–91, n=73)</text>
+
+  <!-- Fold 2 -->
+  <text x="115" y="140" text-anchor="middle" font-size="11" font-weight="bold">Fold 2</text>
+  <rect x="140" y="118" width="131" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="205" y="140" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (1–18)</text>
+  <rect x="271" y="118" width="131" height="34" fill="url(#hatch)" stroke="#004085" stroke-width="2"/>
+  <text x="336" y="140" text-anchor="middle" font-size="10" fill="#004085" font-weight="bold">VAL (19–36)</text>
+  <rect x="402" y="118" width="398" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="601" y="140" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (37–91, n=55)</text>
+
+  <!-- Fold 3 -->
+  <text x="115" y="183" text-anchor="middle" font-size="11" font-weight="bold">Fold 3</text>
+  <rect x="140" y="161" width="262" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="271" y="183" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (1–36)</text>
+  <rect x="402" y="161" width="131" height="34" fill="url(#hatch)" stroke="#004085" stroke-width="2"/>
+  <text x="467" y="183" text-anchor="middle" font-size="10" fill="#004085" font-weight="bold">VAL (37–54)</text>
+  <rect x="533" y="161" width="267" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="666" y="183" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (55–91)</text>
+
+  <!-- Fold 4 -->
+  <text x="115" y="226" text-anchor="middle" font-size="11" font-weight="bold">Fold 4</text>
+  <rect x="140" y="204" width="393" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="336" y="226" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (1–54)</text>
+  <rect x="533" y="204" width="131" height="34" fill="url(#hatch)" stroke="#004085" stroke-width="2"/>
+  <text x="598" y="226" text-anchor="middle" font-size="10" fill="#004085" font-weight="bold">VAL (55–72)</text>
+  <rect x="664" y="204" width="136" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="732" y="226" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (73–91)</text>
+
+  <!-- Fold 5 -->
+  <text x="115" y="269" text-anchor="middle" font-size="11" font-weight="bold">Fold 5</text>
+  <rect x="140" y="247" width="524" height="34" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="402" y="269" text-anchor="middle" font-size="10" fill="#1a5276">TRAIN (actors 1–72, n=73)</text>
+  <rect x="664" y="247" width="136" height="34" fill="url(#hatch)" stroke="#004085" stroke-width="2"/>
+  <text x="732" y="269" text-anchor="middle" font-size="10" fill="#004085" font-weight="bold">VAL (73–91)</text>
+
+  <!-- Legend -->
+  <rect x="140" y="300" width="20" height="14" fill="#cce5ff" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="165" y="312" font-size="10">Training set (~73 actors, ~4,940 clips)</text>
+  <rect x="370" y="300" width="20" height="14" fill="url(#hatch)" stroke="#004085" stroke-width="2"/>
+  <text x="395" y="312" font-size="10">Validation set (~18 actors, ~1,230 clips)</text>
+  <text x="630" y="312" font-size="9" fill="#555" font-style="italic">No actor appears in both sets</text>
+</svg>
