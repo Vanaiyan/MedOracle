@@ -9,16 +9,24 @@ import axios from 'axios';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// ── In-memory token store ─────────────────────────────────────────────────
+const _STORAGE_KEY = 'mo_refresh_token';
+
+// ── Token store (access in memory, refresh in localStorage) ───────────────
 let _accessToken  = null;
-let _refreshToken = null;
+let _refreshToken = localStorage.getItem(_STORAGE_KEY) || null;
 
 export const setTokens = (access, refresh) => {
   _accessToken  = access;
   _refreshToken = refresh;
+  localStorage.setItem(_STORAGE_KEY, refresh);
 };
-export const clearTokens = () => { _accessToken = null; _refreshToken = null; };
-export const getAccessToken = () => _accessToken;
+export const clearTokens = () => {
+  _accessToken  = null;
+  _refreshToken = null;
+  localStorage.removeItem(_STORAGE_KEY);
+};
+export const getAccessToken  = () => _accessToken;
+export const getRefreshToken = () => _refreshToken;
 export const isAuthenticated = () => !!_accessToken;
 
 // ── Axios instance ─────────────────────────────────────────────────────────
@@ -67,6 +75,11 @@ export const authAPI = {
 export const predictAPI = {
   predict:          (payload) => api.post('/predict', payload),
   predictSynthetic: (emotion) => api.post(`/predict/synthetic${emotion ? `?emotion=${emotion}` : ''}`),
+  predictVideo:     (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/predict/video', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
   explain:          (session_id) => api.get(`/explain/${session_id}`),
 };
 

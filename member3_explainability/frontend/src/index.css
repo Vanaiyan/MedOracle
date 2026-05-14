@@ -334,6 +334,76 @@ p  { color: var(--text-secondary); }
 .animate-fadeinup  { animation: fadeInUp 0.35s ease; }
 .pulse-glow        { animation: pulseGlow 2s ease infinite; }
 
+/* ── Video upload drop zone ─────────────────────────────────── */
+.video-drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
+  background: rgba(255,255,255,0.02);
+  position: relative;
+}
+.video-drop-zone:hover,
+.video-drop-zone.drag-over {
+  border-color: var(--accent-blue);
+  background: rgba(99,179,237,0.05);
+  box-shadow: 0 0 0 4px rgba(99,179,237,0.08);
+}
+.video-drop-zone.has-file {
+  border-color: var(--accent-purple);
+  background: rgba(183,148,244,0.05);
+  border-style: solid;
+}
+.video-drop-zone.loading {
+  border-color: var(--accent-blue);
+  background: rgba(99,179,237,0.04);
+  cursor: not-allowed;
+  border-style: solid;
+}
+.drop-zone-icon {
+  font-size: 2.25rem;
+  margin-bottom: 0.75rem;
+  display: block;
+  line-height: 1;
+}
+.drop-zone-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+.drop-zone-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.drop-zone-file-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: rgba(183,148,244,0.1);
+  border: 1px solid rgba(183,148,244,0.25);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--accent-purple);
+  font-weight: 500;
+}
+.drop-zone-clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+  transition: color var(--transition);
+}
+.drop-zone-clear:hover { color: var(--accent-red); }
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 1024px) {
   .dashboard-sidebar { display: none; }
