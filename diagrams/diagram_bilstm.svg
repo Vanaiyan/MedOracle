@@ -1,0 +1,127 @@
+<svg viewBox="0 0 860 420" xmlns="http://www.w3.org/2000/svg" font-family="Times New Roman, serif">
+  <text x="430" y="26" text-anchor="middle" font-size="14" font-weight="bold">Figure 5.3: VideoEmotionModel — ResNet50 + BiLSTM Architecture</text>
+
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#333"/>
+    </marker>
+    <marker id="arrb" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#004085"/>
+    </marker>
+    <marker id="arro" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#e67e22"/>
+    </marker>
+  </defs>
+
+  <!-- Input video clip label -->
+  <text x="60" y="60" text-anchor="middle" font-size="11" font-weight="bold">Input Clip</text>
+  <text x="60" y="74" text-anchor="middle" font-size="10">(B, T, 3, 224, 224)</text>
+  <text x="60" y="88" text-anchor="middle" font-size="9">B=batch, T=16</text>
+
+  <!-- 3 frames visual -->
+  <rect x="10" y="100" width="48" height="60" rx="3" fill="#e8f4f8" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="34" y="128" text-anchor="middle" font-size="9">frame 1</text>
+  <rect x="32" y="110" width="48" height="60" rx="3" fill="#e8f4f8" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="56" y="138" text-anchor="middle" font-size="9">frame 2</text>
+  <rect x="54" y="120" width="48" height="60" rx="3" fill="#e8f4f8" stroke="#2c7bb6" stroke-width="1.5"/>
+  <text x="78" y="148" text-anchor="middle" font-size="9">...</text>
+  <text x="78" y="162" text-anchor="middle" font-size="9">frame 16</text>
+
+  <!-- Reshape arrow -->
+  <line x1="102" y1="150" x2="135" y2="150" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="118" y="143" text-anchor="middle" font-size="9">reshape</text>
+  <text x="118" y="163" text-anchor="middle" font-size="8">(B×T, 3, 224, 224)</text>
+
+  <!-- ResNet50 -->
+  <rect x="135" y="118" width="120" height="64" rx="6" fill="#d4edda" stroke="#28a745" stroke-width="2"/>
+  <text x="195" y="140" text-anchor="middle" font-size="12" font-weight="bold">ResNet50</text>
+  <text x="195" y="156" text-anchor="middle" font-size="10">Encoder</text>
+  <text x="195" y="171" text-anchor="middle" font-size="9">(partial fine-tune)</text>
+
+  <!-- Arrow + reshape label -->
+  <line x1="255" y1="150" x2="286" y2="150" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="270" y="143" text-anchor="middle" font-size="9">reshape</text>
+  <text x="270" y="163" text-anchor="middle" font-size="8">(B, T, 2048)</text>
+
+  <!-- Frame features box -->
+  <rect x="286" y="118" width="110" height="64" rx="5" fill="#fff3cd" stroke="#f0ad4e" stroke-width="1.5"/>
+  <text x="341" y="140" text-anchor="middle" font-size="11" font-weight="bold">Frame</text>
+  <text x="341" y="154" text-anchor="middle" font-size="11" font-weight="bold">Features</text>
+  <text x="341" y="170" text-anchor="middle" font-size="9">(B, 16, 2048)</text>
+
+  <!-- Arrow to BiLSTM -->
+  <line x1="396" y1="150" x2="424" y2="150" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- BiLSTM block -->
+  <rect x="424" y="90" width="200" height="130" rx="8" fill="#cce5ff" stroke="#004085" stroke-width="2"/>
+  <text x="524" y="113" text-anchor="middle" font-size="13" font-weight="bold">BiLSTM</text>
+  <line x1="424" y1="120" x2="624" y2="120" stroke="#004085" stroke-width="1" stroke-dasharray="4,2"/>
+
+  <!-- Forward LSTM -->
+  <rect x="440" y="128" width="168" height="32" rx="4" fill="#4a90d9" stroke="#004085" stroke-width="1"/>
+  <text x="524" y="140" text-anchor="middle" font-size="10" fill="white">→ Forward LSTM (256 hidden)</text>
+  <text x="524" y="153" text-anchor="middle" font-size="9" fill="white">frames 1, 2, 3, ... 16</text>
+
+  <!-- Backward LSTM -->
+  <rect x="440" y="170" width="168" height="32" rx="4" fill="#e67e22" stroke="#b7770d" stroke-width="1"/>
+  <text x="524" y="182" text-anchor="middle" font-size="10" fill="white">← Backward LSTM (256 hidden)</text>
+  <text x="524" y="195" text-anchor="middle" font-size="9" fill="white">frames 16, 15, ... 1</text>
+
+  <!-- 2 layers note -->
+  <text x="524" y="212" text-anchor="middle" font-size="9" fill="#004085">2 stacked layers, dropout=0.3</text>
+
+  <!-- Arrow to last hidden -->
+  <line x1="624" y1="150" x2="654" y2="150" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="639" y="143" text-anchor="middle" font-size="9">last</text>
+  <text x="639" y="163" text-anchor="middle" font-size="8">timestep</text>
+
+  <!-- Last hidden state -->
+  <rect x="654" y="125" width="85" height="50" rx="5" fill="#e2d9f3" stroke="#6f42c1" stroke-width="1.5"/>
+  <text x="696" y="145" text-anchor="middle" font-size="11" font-weight="bold">h_last</text>
+  <text x="696" y="160" text-anchor="middle" font-size="9">(B, 512)</text>
+  <text x="696" y="173" text-anchor="middle" font-size="8">fwd 256 + bwd 256</text>
+
+  <!-- Arrow to FC head -->
+  <line x1="739" y1="150" x2="760" y2="150" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+
+  <!-- FC classification head -->
+  <rect x="760" y="90" width="90" height="160" rx="6" fill="#f8d7da" stroke="#721c24" stroke-width="2"/>
+  <text x="805" y="112" text-anchor="middle" font-size="11" font-weight="bold">FC Head</text>
+  <line x1="760" y1="118" x2="850" y2="118" stroke="#721c24" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="805" y="136" text-anchor="middle" font-size="10">Linear</text>
+  <text x="805" y="149" text-anchor="middle" font-size="9">512 → 256</text>
+  <text x="805" y="170" text-anchor="middle" font-size="10">ReLU</text>
+  <text x="805" y="191" text-anchor="middle" font-size="10">Dropout</text>
+  <text x="805" y="204" text-anchor="middle" font-size="9">(p=0.4)</text>
+  <text x="805" y="225" text-anchor="middle" font-size="10">Linear</text>
+  <text x="805" y="238" text-anchor="middle" font-size="9">256 → 5</text>
+
+  <!-- Output logits -->
+  <line x1="805" y1="250" x2="805" y2="272" stroke="#333" stroke-width="1.8" marker-end="url(#arr)"/>
+  <rect x="760" y="272" width="90" height="36" rx="4" fill="#2c7bb6" stroke="#1a5276" stroke-width="1.5"/>
+  <text x="805" y="288" text-anchor="middle" font-size="11" fill="white" font-weight="bold">Logits</text>
+  <text x="805" y="302" text-anchor="middle" font-size="10" fill="white">(B, 5)</text>
+
+  <!-- Softmax -->
+  <line x1="760" y1="290" x2="710" y2="290" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="630" y="272" width="80" height="36" rx="4" fill="#2c7bb6" stroke="#1a5276" stroke-width="1.5"/>
+  <text x="670" y="288" text-anchor="middle" font-size="10" fill="white">Softmax</text>
+  <text x="670" y="302" text-anchor="middle" font-size="10" fill="white">→ Probs</text>
+  <text x="670" y="316" text-anchor="middle" font-size="9" fill="white">(B, 5)</text>
+
+  <!-- Parameter summary boxes at bottom -->
+  <rect x="10" y="345" width="200" height="50" rx="4" fill="#f8f9fa" stroke="#dee2e6" stroke-width="1"/>
+  <text x="110" y="362" text-anchor="middle" font-size="10" font-weight="bold">ResNet50Encoder</text>
+  <text x="110" y="376" text-anchor="middle" font-size="10">Total: 23.5M params</text>
+  <text x="110" y="389" text-anchor="middle" font-size="9">Trainable: ~20M | Frozen: ~3.5M</text>
+
+  <rect x="230" y="345" width="200" height="50" rx="4" fill="#f8f9fa" stroke="#dee2e6" stroke-width="1"/>
+  <text x="330" y="362" text-anchor="middle" font-size="10" font-weight="bold">EmotionBiLSTM + FC Head</text>
+  <text x="330" y="376" text-anchor="middle" font-size="10">Total: ~6.4M params</text>
+  <text x="330" y="389" text-anchor="middle" font-size="9">All trainable</text>
+
+  <rect x="450" y="345" width="200" height="50" rx="4" fill="#f8f9fa" stroke="#dee2e6" stroke-width="1"/>
+  <text x="550" y="362" text-anchor="middle" font-size="10" font-weight="bold">VideoEmotionModel</text>
+  <text x="550" y="376" text-anchor="middle" font-size="10">Total: ~30M params</text>
+  <text x="550" y="389" text-anchor="middle" font-size="9">~26.4M trainable</text>
+</svg>
