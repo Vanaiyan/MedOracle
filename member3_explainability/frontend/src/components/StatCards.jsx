@@ -31,8 +31,12 @@ export default function StatCards({ summary }) {
 
   const { session_count, dominant_emotion, dominant_modality, avg_confidence } = summary;
 
-  const dominantLabel = dominant_modality === 'physio'
-    ? 'Physiological' : dominant_modality === 'video' ? 'Video' : '—';
+  const MODALITY_LABELS = {
+    EEG:   'EEG (Brain)',
+    GSR:   'GSR (Skin)',
+    video: 'Video',
+  };
+  const dominantLabel = MODALITY_LABELS[dominant_modality] ?? dominant_modality ?? '—';
 
   return (
     <div className="grid-4">

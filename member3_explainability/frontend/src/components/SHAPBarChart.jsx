@@ -81,10 +81,7 @@ export default function SHAPBarChart({ shapValues, featureImportance, faithfulne
             <div className="faithfulness-bar" style={{ width: 80 }}>
               <div
                 className="faithfulness-fill"
-                style={{
-                  width: `${faithfulness * 100}%`,
-                  background: faithColor,
-                }}
+                style={{ width: `${faithfulness * 100}%`, background: faithColor }}
               />
             </div>
           </div>
