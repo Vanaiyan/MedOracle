@@ -90,6 +90,7 @@ export default function Dashboard() {
   const [videoError, setVideoError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   // Load dashboard summary
   const loadSummary = useCallback(() => {
@@ -376,25 +377,37 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* ── Right sidebar ──────────────────────────────────── */}
+        {/* ── Right sidebar — session history only ───────────── */}
         <div className="dashboard-sidebar">
-          {/* Session History top half */}
-          <div style={{ flex: 1, borderBottom: '1px solid var(--border)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <SessionHistoryPanel
               activeSessionId={activeSessionId}
-              onSelectSession={(id) => { setActiveSessionId(id); setAutoExplanation(null); }}
-            />
-          </div>
-
-          {/* Chatbot bottom half */}
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <ChatbotPanel
-              sessionId={activeSessionId}
-              autoExplanation={autoExplanation}
+              onSelectSession={(id) => { setActiveSessionId(id); setAutoExplanation(null); setChatOpen(true); }}
             />
           </div>
         </div>
       </div>
+
+      {/* ── Floating chat panel ─────────────────────────────────── */}
+      {chatOpen && (
+        <div className="chat-float-panel">
+          <ChatbotPanel
+            sessionId={activeSessionId}
+            autoExplanation={autoExplanation}
+            onClose={() => setChatOpen(false)}
+          />
+        </div>
+      )}
+
+      {/* ── Floating chat button ────────────────────────────────── */}
+      <button
+        className="chat-fab"
+        onClick={() => setChatOpen(o => !o)}
+        title={chatOpen ? 'Close chat' : 'Open AI assistant'}
+      >
+        {chatOpen ? '✕' : '💬'}
+        {!chatOpen && activeSessionId && <span className="chat-fab-badge" />}
+      </button>
     </div>
   );
 }

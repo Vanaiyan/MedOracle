@@ -6,6 +6,51 @@
 import { useState, useEffect, useRef } from 'react';
 import { chatAPI } from '../api/client';
 
+function renderMarkdown(text) {
+  const lines = text.split('\n');
+  const elements = [];
+  let listItems = [];
+
+  const flushList = () => {
+    if (listItems.length) {
+      elements.push(
+        <ul key={`ul-${elements.length}`} style={{ margin: '0.4rem 0 0.4rem 1.1rem', padding: 0 }}>
+          {listItems.map((item, i) => <li key={i} style={{ marginBottom: 2 }}>{inlineFormat(item)}</li>)}
+        </ul>
+      );
+      listItems = [];
+    }
+  };
+
+  const inlineFormat = (str) => {
+    // **bold** and *italic*
+    const parts = str.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**'))
+        return <strong key={i}>{part.slice(2, -2)}</strong>;
+      if (part.startsWith('*') && part.endsWith('*'))
+        return <em key={i}>{part.slice(1, -1)}</em>;
+      return part;
+    });
+  };
+
+  lines.forEach((line, i) => {
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    if (bullet) {
+      listItems.push(bullet[1]);
+    } else {
+      flushList();
+      if (line.trim() === '') {
+        if (elements.length) elements.push(<br key={`br-${i}`} />);
+      } else {
+        elements.push(<span key={`l-${i}`} style={{ display: 'block' }}>{inlineFormat(line)}</span>);
+      }
+    }
+  });
+  flushList();
+  return elements;
+}
+
 function TypingIndicator() {
   return (
     <div className="chat-bubble typing">
@@ -28,7 +73,7 @@ function TypingIndicator() {
   );
 }
 
-export default function ChatbotPanel({ sessionId, autoExplanation }) {
+export default function ChatbotPanel({ sessionId, autoExplanation, onClose }) {
   const [messages, setMessages] = useState([]);
   const [input,    setInput   ] = useState('');
   const [sending,  setSending ] = useState(false);
@@ -109,9 +154,23 @@ export default function ChatbotPanel({ sessionId, autoExplanation }) {
               {sessionId ? 'Ask about this session' : 'Select a session to start'}
             </p>
           </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-green)' }} />
-            <span style={{ fontSize: 11, color: 'var(--accent-green)' }}>AI Active</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-green)' }} />
+              <span style={{ fontSize: 11, color: 'var(--accent-green)' }}>AI Active</span>
+            </div>
+            {onClose && (
+              <button onClick={onClose} style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-muted)', fontSize: 16, lineHeight: 1,
+                padding: '2px 4px', borderRadius: 4,
+                transition: 'color 0.15s',
+              }}
+                onMouseEnter={e => e.target.style.color = 'var(--text-primary)'}
+                onMouseLeave={e => e.target.style.color = 'var(--text-muted)'}
+                title="Close"
+              >✕</button>
+            )}
           </div>
         </div>
       </div>
@@ -130,7 +189,7 @@ export default function ChatbotPanel({ sessionId, autoExplanation }) {
         ) : (
           messages.map(m => (
             <div key={m.id} className={`chat-bubble ${m.role}`}>
-              {m.content}
+              {m.role === 'assistant' ? renderMarkdown(m.content) : m.content}
             </div>
           ))
         )}
