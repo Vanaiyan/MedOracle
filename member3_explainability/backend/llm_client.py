@@ -161,34 +161,29 @@ def _build_context_block(shap_output: dict) -> str:
 # Gemini call (free tier)
 # ---------------------------------------------------------------------------
 
-async def _call_gemini(messages: List[dict], system: str, context_block: str) -> str:
-    """Call Google Gemini 1.5 Flash (free tier)."""
-    try:
-        import google.generativeai as genai
+async def _call_deepseek(messages: List[dict], system: str) -> str:
+    """Call DeepSeek via OpenRouter (OpenAI-compatible)."""
+    import httpx
 
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY not set")
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=system,
+    payload = {
+        "model": "deepseek/deepseek-chat",
+        "messages": [{"role": "system", "content": system}, *messages],
+        "temperature": 0.7,
+        "max_tokens": 512,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
         )
-
-        # Build the full contents list for generate_content_async
-        # Gemini uses 'user' and 'model' roles (not 'assistant')
-        contents = []
-        for msg in messages:
-            role = "model" if msg["role"] == "assistant" else "user"
-            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
-
-        response = await model.generate_content_async(contents)
-        return response.text.strip()
-
-    except Exception as exc:
-        logger.warning("Gemini call failed: %s", exc)
-        raise
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
 
 # ---------------------------------------------------------------------------
@@ -401,14 +396,13 @@ async def get_llm_response(
             }
         messages.append({"role": "user", "content": user_message})
 
-    # ── 3. Try Gemini (free) ──────────────────────────────────────────────
+    # ── 3. Try DeepSeek ───────────────────────────────────────────────────
     try:
-        return await _call_gemini(messages, _SYSTEM_PROMPT, context_block)
-    except Exception:
-        pass
+        return await _call_deepseek(messages, _SYSTEM_PROMPT)
+    except Exception as exc:
+        logger.warning("DeepSeek call failed (%s: %s) — using simulated fallback.", type(exc).__name__, exc)
 
     # ── 4. Simulated fallback ─────────────────────────────────────────────
-    logger.info("Using simulated LLM response (Gemini unavailable).")
     return _simulated_response(shap_output, user_message)
 
 

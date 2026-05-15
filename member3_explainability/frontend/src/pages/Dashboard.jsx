@@ -3,7 +3,7 @@
  * Main dashboard — assembles all components.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import NavBar from '../components/NavBar';
 import StatCards from '../components/StatCards';
 import EmotionTrendChart from '../components/EmotionTrendChart';
@@ -86,6 +86,11 @@ export default function Dashboard() {
   const [runningPrediction, setRunningPrediction] = useState(false);
   const [demoEmotion, setDemoEmotion] = useState('stress');
   const [showDemoPanel, setShowDemoPanel] = useState(false);
+  const [videoFile, setVideoFile] = useState(null);
+  const [videoError, setVideoError] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   // Load dashboard summary
   const loadSummary = useCallback(() => {
@@ -118,6 +123,28 @@ export default function Dashboard() {
       avg_confidence: sessionDetail.confidence,
     }
     : null;
+
+  const runVideoPrediction = async () => {
+    if (!videoFile) return;
+    setVideoError(null);
+    setRunningPrediction(true);
+    try {
+      const { data } = await predictAPI.predictVideo(videoFile);
+      setActiveSessionId(data.session_id);
+      setVideoFile(null);
+      try {
+        const chatResp = await chatAPI.send(data.session_id, 'Please explain these results for me.');
+        setAutoExplanation(chatResp.data.response);
+      } catch {
+        setAutoExplanation('Analysis complete. Ask me any questions about this result.');
+      }
+      loadSummary();
+    } catch (e) {
+      setVideoError(e.response?.data?.detail || 'Video prediction failed. Check the file and try again.');
+    } finally {
+      setRunningPrediction(false);
+    }
+  };
 
   // Run synthetic prediction (backend generates randomised fused output)
   const runDemoPrediction = async () => {
@@ -185,6 +212,84 @@ export default function Dashboard() {
                 disabled={runningPrediction}
               >
                 {runningPrediction ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Running…</> : '▶ Run Prediction'}
+              </button>
+            </div>
+          </div>
+
+          {/* Video upload panel */}
+          <div className="card" style={{ marginTop: '1rem' }}>
+            <p className="card-title">Analyse Video</p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/mp4,video/avi,video/quicktime,video/x-matroska,video/x-flv,video/webm"
+              style={{ display: 'none' }}
+              onChange={e => { setVideoFile(e.target.files[0] || null); setVideoError(null); }}
+            />
+
+            <div
+              className={`video-drop-zone${dragOver ? ' drag-over' : ''}${videoFile ? ' has-file' : ''}${runningPrediction ? ' loading' : ''}`}
+              onClick={() => !runningPrediction && fileInputRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={e => {
+                e.preventDefault();
+                setDragOver(false);
+                const f = e.dataTransfer.files[0];
+                if (f) { setVideoFile(f); setVideoError(null); }
+              }}
+            >
+              {runningPrediction ? (
+                <>
+                  <span className="drop-zone-icon">⏳</span>
+                  <p className="drop-zone-title">Analysing video…</p>
+                  <p className="drop-zone-sub">Running emotion recognition, please wait</p>
+                  <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center' }}>
+                    <span className="spinner" />
+                  </div>
+                </>
+              ) : videoFile ? (
+                <>
+                  <span className="drop-zone-icon">🎬</span>
+                  <p className="drop-zone-title">Ready to analyse</p>
+                  <div className="drop-zone-file-info">
+                    <span>📄</span>
+                    <span style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {videoFile.name}
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
+                      {(videoFile.size / 1024 / 1024).toFixed(1)} MB
+                    </span>
+                    <button
+                      className="drop-zone-clear"
+                      onClick={e => { e.stopPropagation(); setVideoFile(null); setVideoError(null); }}
+                      title="Remove file"
+                    >✕</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="drop-zone-icon">📹</span>
+                  <p className="drop-zone-title">Drop a video here or click to browse</p>
+                  <p className="drop-zone-sub">Supports MP4 · MOV · AVI · MKV · FLV · WebM</p>
+                </>
+              )}
+            </div>
+
+            {videoError && (
+              <p className="error-msg" style={{ marginTop: '0.6rem' }}>⚠ {videoError}</p>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+              <button
+                className="btn btn-primary"
+                onClick={runVideoPrediction}
+                disabled={!videoFile || runningPrediction}
+              >
+                {runningPrediction
+                  ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Analysing…</>
+                  : '▶ Run Emotion Analysis'}
               </button>
             </div>
           </div>
@@ -272,25 +377,37 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* ── Right sidebar ──────────────────────────────────── */}
+        {/* ── Right sidebar — session history only ───────────── */}
         <div className="dashboard-sidebar">
-          {/* Session History top half */}
-          <div style={{ flex: 1, borderBottom: '1px solid var(--border)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <SessionHistoryPanel
               activeSessionId={activeSessionId}
-              onSelectSession={(id) => { setActiveSessionId(id); setAutoExplanation(null); }}
-            />
-          </div>
-
-          {/* Chatbot bottom half */}
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <ChatbotPanel
-              sessionId={activeSessionId}
-              autoExplanation={autoExplanation}
+              onSelectSession={(id) => { setActiveSessionId(id); setAutoExplanation(null); setChatOpen(true); }}
             />
           </div>
         </div>
       </div>
+
+      {/* ── Floating chat panel ─────────────────────────────────── */}
+      {chatOpen && (
+        <div className="chat-float-panel">
+          <ChatbotPanel
+            sessionId={activeSessionId}
+            autoExplanation={autoExplanation}
+            onClose={() => setChatOpen(false)}
+          />
+        </div>
+      )}
+
+      {/* ── Floating chat button ────────────────────────────────── */}
+      <button
+        className="chat-fab"
+        onClick={() => setChatOpen(o => !o)}
+        title={chatOpen ? 'Close chat' : 'Open AI assistant'}
+      >
+        {chatOpen ? '✕' : '💬'}
+        {!chatOpen && activeSessionId && <span className="chat-fab-badge" />}
+      </button>
     </div>
   );
 }

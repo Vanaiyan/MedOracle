@@ -334,6 +334,140 @@ p  { color: var(--text-secondary); }
 .animate-fadeinup  { animation: fadeInUp 0.35s ease; }
 .pulse-glow        { animation: pulseGlow 2s ease infinite; }
 
+/* ── Floating chat widget ───────────────────────────────────── */
+.chat-fab {
+  position: fixed;
+  bottom: 1.75rem;
+  right: 1.75rem;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--gradient-btn);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  box-shadow: 0 4px 20px rgba(66,153,225,0.45);
+  transition: transform var(--transition), box-shadow var(--transition);
+  z-index: 200;
+}
+.chat-fab:hover {
+  transform: scale(1.08);
+  box-shadow: 0 6px 28px rgba(66,153,225,0.6);
+}
+.chat-fab-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  border: 2px solid var(--bg-base);
+}
+.chat-float-panel {
+  position: fixed;
+  bottom: 5.5rem;
+  right: 1.75rem;
+  width: 360px;
+  height: 520px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6), var(--shadow-glow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 199;
+  animation: chatPanelIn 0.22s cubic-bezier(0.34,1.56,0.64,1);
+  transform-origin: bottom right;
+}
+@keyframes chatPanelIn {
+  from { opacity: 0; transform: scale(0.85) translateY(12px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+@media (max-width: 480px) {
+  .chat-float-panel {
+    right: 0; bottom: 0;
+    width: 100vw;
+    height: 80vh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+  .chat-fab { bottom: 1.25rem; right: 1.25rem; }
+}
+
+/* ── Video upload drop zone ─────────────────────────────────── */
+.video-drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
+  background: rgba(255,255,255,0.02);
+  position: relative;
+}
+.video-drop-zone:hover,
+.video-drop-zone.drag-over {
+  border-color: var(--accent-blue);
+  background: rgba(99,179,237,0.05);
+  box-shadow: 0 0 0 4px rgba(99,179,237,0.08);
+}
+.video-drop-zone.has-file {
+  border-color: var(--accent-purple);
+  background: rgba(183,148,244,0.05);
+  border-style: solid;
+}
+.video-drop-zone.loading {
+  border-color: var(--accent-blue);
+  background: rgba(99,179,237,0.04);
+  cursor: not-allowed;
+  border-style: solid;
+}
+.drop-zone-icon {
+  font-size: 2.25rem;
+  margin-bottom: 0.75rem;
+  display: block;
+  line-height: 1;
+}
+.drop-zone-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+.drop-zone-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.drop-zone-file-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: rgba(183,148,244,0.1);
+  border: 1px solid rgba(183,148,244,0.25);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--accent-purple);
+  font-weight: 500;
+}
+.drop-zone-clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+  transition: color var(--transition);
+}
+.drop-zone-clear:hover { color: var(--accent-red); }
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 1024px) {
   .dashboard-sidebar { display: none; }

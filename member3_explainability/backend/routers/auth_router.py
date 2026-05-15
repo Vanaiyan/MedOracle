@@ -17,10 +17,10 @@ from member3_explainability.backend.database import get_db
 from member3_explainability.backend.models import User
 from member3_explainability.backend.auth import (
     hash_password, verify_password,
-    create_access_token, create_refresh_token,
+    create_access_token, create_refresh_token, _decode_token,
 )
 from member3_explainability.backend.schemas import (
-    RegisterRequest, LoginRequest, TokenResponse, UserResponse,
+    RegisterRequest, LoginRequest, TokenResponse, UserResponse, RefreshRequest,
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -64,6 +64,23 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         )
+
+    return TokenResponse(
+        access_token=create_access_token(user.user_id, user.email),
+        refresh_token=create_refresh_token(user.user_id),
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
+    """Issue a new access + refresh token pair from a valid refresh token."""
+    payload = _decode_token(body.refresh_token, expected_type="refresh")
+    user_id = payload.get("sub")
+
+    result = await db.execute(select(User).where(User.user_id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found.")
 
     return TokenResponse(
         access_token=create_access_token(user.user_id, user.email),
