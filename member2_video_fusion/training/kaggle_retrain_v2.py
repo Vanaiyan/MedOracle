@@ -113,8 +113,12 @@ if torch.cuda.is_available():
 CREMAD_NPY_DIR       = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames")
 CREMAD_MANIFEST_PATH = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames/manifest.csv")
 
-# Update this path after committing kaggle_ravdess_extract.py output
+# Update this path after committing kaggle_ravdess_extract.py output as a dataset
 RAVDESS_MANIFEST_PATH = Path("/kaggle/input/datasets/vanaiyan/ravdess-npy-frames/ravdess_manifest.csv")
+# .npy files are in a ravdess_npy/ subfolder inside the same dataset.
+# The manifest stores paths from the extraction notebook's /kaggle/working/ — we remap
+# them here so they resolve correctly in this (different) notebook's input filesystem.
+RAVDESS_NPY_DIR = RAVDESS_MANIFEST_PATH.parent / "ravdess_npy"
 
 # ── Output ─────────────────────────────────────────────────────────────────────
 CHECKPOINT_DIR = Path("/kaggle/working/checkpoints_v2")
@@ -163,6 +167,7 @@ def build_unified_manifest(
     cremad_manifest_path: Path,
     ravdess_manifest_path: Path,
     output_path: Path,
+    ravdess_npy_dir: Path | None = None,
 ) -> list:
     """Merge CREMA-D and RAVDESS manifests into a single unified CSV.
 
@@ -173,6 +178,11 @@ def build_unified_manifest(
 
     RAVDESS manifest CSV (from kaggle_ravdess_extract.py) has columns:
         npy_path, actor_id, source, emotion, emotion_int
+
+    ravdess_npy_dir : if provided, overrides the directory component of each
+        RAVDESS npy_path (keeps the filename). Required when the extraction
+        notebook's /kaggle/working/ paths differ from this notebook's input
+        mount path — which is always the case on Kaggle.
 
     Unified manifest columns (written to output_path):
         npy_path, actor_id, source, emotion, emotion_int
@@ -218,6 +228,8 @@ def build_unified_manifest(
     with open(ravdess_manifest_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             npy_path   = Path(row["npy_path"])
+            if ravdess_npy_dir is not None:
+                npy_path = ravdess_npy_dir / npy_path.name
             emotion_str = row["emotion"].strip().lower()
 
             if not npy_path.exists() or emotion_str not in EMOTION_CLASSES:
@@ -251,6 +263,7 @@ unified_rows = build_unified_manifest(
     CREMAD_MANIFEST_PATH,
     RAVDESS_MANIFEST_PATH,
     UNIFIED_MANIFEST_PATH,
+    ravdess_npy_dir=RAVDESS_NPY_DIR,
 )
 
 # ── Summary stats ──────────────────────────────────────────────────────────────
