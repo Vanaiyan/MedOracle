@@ -175,36 +175,37 @@ def sample_frames_uniform(video_path: Path, n_frames: int = N_FRAMES):
     -------
     np.ndarray of shape (n_frames, H, W, 3) uint8 RGB, or None if the
     video cannot be opened or has fewer frames than requested.
+
+    Implementation note: reads all frames sequentially rather than seeking
+    to specific frame indices. H.264-encoded videos (including RAVDESS) use
+    infrequent keyframes, so cap.set(CAP_PROP_POS_FRAMES, idx) silently
+    fails for non-keyframe positions — sequential reading is the reliable path.
     """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         return None
 
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total < n_frames:
-        cap.release()
-        return None
-
-    indices = np.linspace(0, total - 1, n_frames, dtype=int)
-    frames  = []
-
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+    all_frames = []
+    while True:
         ret, frame = cap.read()
         if not ret or frame is None:
-            cap.release()
-            return None
-        frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-
+            break
+        all_frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     cap.release()
-    return np.stack(frames)   # (T, H, W, 3) uint8 RGB
+
+    if len(all_frames) < n_frames:
+        return None
+
+    indices = np.linspace(0, len(all_frames) - 1, n_frames, dtype=int)
+    return np.stack([all_frames[i] for i in indices])   # (T, H, W, 3) uint8 RGB
 
 
 def detect_and_crop_face(
     frame: np.ndarray,
     yolo: YOLO,
     target_size: int = FRAME_SIZE,
-) -> np.ndarray:
+    precomputed_results=None,
+) -> tuple:
     """Detect the largest face in a frame and return a square crop at target_size.
 
     If YOLO detects no face, returns the full frame resized to target_size.
@@ -213,15 +214,21 @@ def detect_and_crop_face(
 
     Parameters
     ----------
-    frame       : (H, W, 3) uint8 RGB
-    yolo        : loaded YOLO face-detection model
-    target_size : output crop size (default 224)
+    frame               : (H, W, 3) uint8 RGB
+    yolo                : loaded YOLO face-detection model
+    target_size         : output crop size (default 224)
+    precomputed_results : if provided, skip the YOLO call and use these results
 
     Returns
     -------
-    (target_size, target_size, 3) uint8 RGB
+    Tuple of:
+        (target_size, target_size, 3) uint8 RGB
+        bool — whether a face was detected (True) or fallback was used (False)
     """
-    results = yolo.predict(frame, verbose=False, conf=0.3)
+    if precomputed_results is not None:
+        results = precomputed_results
+    else:
+        results = yolo.predict(frame, verbose=False, conf=0.3)
 
     best_box  = None
     best_area = 0
@@ -234,7 +241,8 @@ def detect_and_crop_face(
                 best_area = area
                 best_box  = (x1, y1, x2, y2)
 
-    if best_box is not None:
+    has_face = best_box is not None
+    if has_face:
         x1, y1, x2, y2 = best_box
         # Add a small margin (10%) around the detected face
         H, W = frame.shape[:2]
@@ -251,7 +259,7 @@ def detect_and_crop_face(
 
     # Resize to target_size × target_size
     resized = cv2.resize(crop, (target_size, target_size), interpolation=cv2.INTER_AREA)
-    return resized
+    return resized, has_face
 
 
 def process_clip(
@@ -284,15 +292,13 @@ def process_clip(
     faces_found  = 0
 
     for frame in raw_frames:
-        # Run YOLO — check if face was actually detected (not fallback)
+        # Single YOLO call — results reused by detect_and_crop_face
         results = yolo.predict(frame, verbose=False, conf=0.3)
-        has_face = (results and results[0].boxes is not None
-                    and len(results[0].boxes) > 0)
+        cropped, has_face = detect_and_crop_face(
+            frame, yolo, frame_size, precomputed_results=results
+        )
         if has_face:
             faces_found += 1
-
-        # Crop (with fallback to full frame if no detection)
-        cropped = detect_and_crop_face(frame, yolo, frame_size)
         processed.append(cropped)
 
     return np.stack(processed), faces_found, n_frames
@@ -373,6 +379,40 @@ emo_counts = Counter(RAVDESS_EMOTION_MAP[code] for _, _, code in valid_files)
 print(f"\nEmotion distribution:")
 for emo, cnt in sorted(emo_counts.items()):
     print(f"  {emo:8s} : {cnt}")
+
+# ============================================================
+# HOTFIX — redefine sample_frames_uniform to use sequential read (no seeking)
+# Root cause: RAVDESS H.264 videos have infrequent keyframes; cap.set(POS_FRAMES)
+# silently fails between keyframes. Sequential read + subsample is reliable.
+# ============================================================
+
+import cv2
+import numpy as np
+
+def sample_frames_uniform(video_path, n_frames=16):
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return None
+
+    all_frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            break
+        all_frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    cap.release()
+
+    if len(all_frames) < n_frames:
+        return None
+
+    indices = np.linspace(0, len(all_frames) - 1, n_frames, dtype=int)
+    return np.stack([all_frames[i] for i in indices])
+
+print(f"✓ sample_frames_uniform redefined (sequential read)")
+
+# Quick verify on the first valid file
+test_frames = sample_frames_uniform(valid_files[0][0])
+print(f"  Test clip shape: {test_frames.shape if test_frames is not None else 'FAILED'}")
 
 
 # ============================================================
