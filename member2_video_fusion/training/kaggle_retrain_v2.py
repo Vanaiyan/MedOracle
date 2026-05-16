@@ -132,6 +132,8 @@ ENCODER_DROPOUT  = 0.3        # Fix 1: was 0.0 in v1
 EARLY_STOP_PAT   = 5          # Fix 2: patience in epochs
 SCHED_PATIENCE   = 3          # Fix 3: ReduceLROnPlateau patience
 SCHED_FACTOR     = 0.5        # halve LR on plateau
+LABEL_SMOOTHING  = 0.1        # Fix 7: prevents overconfident hard-label learning
+GRAD_CLIP_NORM   = 1.0        # Fix 8: caps gradient magnitude, stabilises updates
 N_FOLDS          = 5
 
 USE_AMP = torch.cuda.is_available()   # AMP only on CUDA
@@ -147,6 +149,8 @@ print(f"  BATCH_SIZE      : {BATCH_SIZE}")
 print(f"  LR              : {LR}  WD={WEIGHT_DECAY}")
 print(f"  ENCODER_DROP    : {ENCODER_DROPOUT}  (was 0.0 in v1)")
 print(f"  SCHEDULER       : ReduceLROnPlateau(patience={SCHED_PATIENCE}, factor={SCHED_FACTOR})")
+print(f"  LABEL_SMOOTHING : {LABEL_SMOOTHING}   (prevents overconfident predictions)")
+print(f"  GRAD_CLIP_NORM  : {GRAD_CLIP_NORM}     (max gradient norm before clipping)")
 print(f"  MIXED PRECISION : {USE_AMP}")
 print(f"  CHECKPOINT DIR  : {CHECKPOINT_DIR}")
 
@@ -336,12 +340,19 @@ def train_one_epoch(
                 out  = model(clips)
                 loss = criterion(out["logits"], labels)
             scaler.scale(loss).backward()
+            # Fix 8: unscale before clipping so the clip threshold is in
+            # the original gradient space, not the scaled one.
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
             scaler.step(optimizer)
             scaler.update()
         else:
             out  = model(clips)
             loss = criterion(out["logits"], labels)
             loss.backward()
+            # Fix 8: gradient clipping — caps update magnitude, prevents
+            # a single bad batch from blowing up learned weights.
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
             optimizer.step()
 
         total_loss += loss.item() * clips.size(0)
@@ -486,7 +497,13 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
           f"{params['trainable']:,} trainable ({params['trainable_pct']}%)")
 
     # ── Loss, optimiser, scheduler ──────────────────────────────────────────────
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # Fix 7: label_smoothing=0.1 — soft targets prevent the model from
+    # learning overconfident outputs (e.g. 0.99 for one class), which is
+    # one of the primary causes of the v1 overfitting pattern.
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
+        label_smoothing=LABEL_SMOOTHING,
+    )
 
     optimizer = optim.AdamW(   # AdamW = Adam + decoupled weight decay (slight improvement)
         model.parameters(),
@@ -641,6 +658,8 @@ summary = {
         "sched_patience": SCHED_PATIENCE,
         "sched_factor":   SCHED_FACTOR,
         "augmentation":   "flip+colorjitter+rotation10deg",
+        "label_smoothing": LABEL_SMOOTHING,
+        "grad_clip_norm": GRAD_CLIP_NORM,
         "use_amp":        USE_AMP,
         "device":         str(device),
     },
