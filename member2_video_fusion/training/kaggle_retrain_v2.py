@@ -79,6 +79,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -87,6 +88,7 @@ from sklearn.metrics import classification_report, f1_score
 from sklearn.model_selection import GroupKFold
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, Subset
+from tqdm.auto import tqdm
 
 from member2_video_fusion.models.video_model import VideoEmotionModel
 from member2_video_fusion.preprocessing.multi_corpus_dataset import (
@@ -326,12 +328,14 @@ def train_one_epoch(
     optimizer: optim.Optimizer,
     device:    torch.device,
     scaler,
+    desc:      str = "train",
 ) -> tuple[float, float]:
     """Run one training epoch with mixed-precision support.
 
     Parameters
     ----------
     scaler : torch.amp.GradScaler instance (or None if not using AMP)
+    desc   : tqdm bar label (include fold/epoch info for readability)
 
     Returns
     -------
@@ -339,10 +343,14 @@ def train_one_epoch(
     """
     model.train()
     total_loss  = 0.0
+    n_processed = 0
     all_preds   = []
     all_labels  = []
 
-    for batch in loader:
+    pbar = tqdm(loader, desc=f"  {desc}", leave=False, unit="batch",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
+
+    for batch in pbar:
         clips  = batch["clip"].to(device)    # (B, T, 3, 224, 224)
         labels = batch["label"].to(device)   # (B,)
 
@@ -353,8 +361,6 @@ def train_one_epoch(
                 out  = model(clips)
                 loss = criterion(out["logits"], labels)
             scaler.scale(loss).backward()
-            # Fix 8: unscale before clipping so the clip threshold is in
-            # the original gradient space, not the scaled one.
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
             scaler.step(optimizer)
@@ -363,14 +369,16 @@ def train_one_epoch(
             out  = model(clips)
             loss = criterion(out["logits"], labels)
             loss.backward()
-            # Fix 8: gradient clipping — caps update magnitude, prevents
-            # a single bad batch from blowing up learned weights.
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
             optimizer.step()
 
-        total_loss += loss.item() * clips.size(0)
+        batch_size   = clips.size(0)
+        total_loss  += loss.item() * batch_size
+        n_processed += batch_size
         all_preds.extend(out["predicted_class"].cpu().numpy().tolist())
         all_labels.extend(labels.cpu().numpy().tolist())
+
+        pbar.set_postfix({"avg_loss": f"{total_loss / n_processed:.4f}"})
 
     avg_loss = total_loss / len(loader.dataset)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
@@ -383,6 +391,7 @@ def evaluate(
     loader:    DataLoader,
     criterion: nn.Module,
     device:    torch.device,
+    desc:      str = "val",
 ) -> tuple[float, float, list, list]:
     """Run validation (no gradients, no AMP).
 
@@ -391,20 +400,28 @@ def evaluate(
     (avg_loss, macro_f1, all_preds, all_labels)
     """
     model.eval()
-    total_loss = 0.0
-    all_preds  = []
-    all_labels = []
+    total_loss  = 0.0
+    n_processed = 0
+    all_preds   = []
+    all_labels  = []
 
-    for batch in loader:
+    pbar = tqdm(loader, desc=f"  {desc}", leave=False, unit="batch",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
+
+    for batch in pbar:
         clips  = batch["clip"].to(device)
         labels = batch["label"].to(device)
 
         out  = model(clips)
         loss = criterion(out["logits"], labels)
 
-        total_loss += loss.item() * clips.size(0)
+        batch_size   = clips.size(0)
+        total_loss  += loss.item() * batch_size
+        n_processed += batch_size
         all_preds.extend(out["predicted_class"].cpu().numpy().tolist())
         all_labels.extend(labels.cpu().numpy().tolist())
+
+        pbar.set_postfix({"avg_loss": f"{total_loss / n_processed:.4f}"})
 
     avg_loss = total_loss / len(loader.dataset)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
@@ -539,8 +556,10 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     # Fix 2: Early stopping
     early_stop = EarlyStopping(patience=EARLY_STOP_PAT)
 
-    ckpt_path  = CHECKPOINT_DIR / f"fold_{fold_num}_best.pt"
-    best_epoch = 0
+    ckpt_path      = CHECKPOINT_DIR / f"fold_{fold_num}_best.pt"
+    best_epoch     = 0
+    best_train_f1  = 0.0   # train F1 at the best-val epoch (for overfitting gap)
+    history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
 
     print(f"\n  {'Ep':>3}  {'Train Loss':>10}  {'Train F1':>8}  "
           f"{'Val Loss':>8}  {'Val F1':>6}  {'LR':>8}  {'ES':>5}  {'Δ'}")
@@ -551,11 +570,19 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
         t0 = time.time()
 
         train_loss, train_f1 = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, scaler
+            model, train_loader, criterion, optimizer, device, scaler,
+            desc=f"F{fold_num} E{epoch:02d} train",
         )
         val_loss, val_f1, val_preds, val_labels = evaluate(
-            model, val_loader, criterion, device
+            model, val_loader, criterion, device,
+            desc=f"F{fold_num} E{epoch:02d} val  ",
         )
+
+        # Record history for plots
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_f1"].append(train_f1)
+        history["val_f1"].append(val_f1)
 
         # Scheduler step (Fix 3)
         scheduler.step(val_f1)
@@ -569,7 +596,8 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
         marker   = "✓" if improved else " "
 
         if improved:
-            best_epoch = epoch
+            best_epoch    = epoch
+            best_train_f1 = train_f1
             torch.save({
                 "fold":                fold_num,
                 "epoch":               epoch,
@@ -618,13 +646,50 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     print(report)
 
     fold_results.append({
-        "fold":         fold_num,
-        "best_epoch":   best_epoch,
-        "val_macro_f1": early_stop.best_f1,
-        "checkpoint":   str(ckpt_path),
-        "train_clips":  len(train_ds),
-        "val_clips":    len(val_ds),
+        "fold":             fold_num,
+        "best_epoch":       best_epoch,
+        "val_macro_f1":     early_stop.best_f1,
+        "train_f1_at_best": best_train_f1,
+        "checkpoint":       str(ckpt_path),
+        "train_clips":      len(train_ds),
+        "val_clips":        len(val_ds),
+        "history":          history,
     })
+
+    # ── Per-fold learning curve plot ───────────────────────────────────────────
+    epochs_ran = list(range(1, len(history["train_loss"]) + 1))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    ax1.plot(epochs_ran, history["train_loss"], "b-o", ms=3, label="Train Loss")
+    ax1.plot(epochs_ran, history["val_loss"],   "r-o", ms=3, label="Val Loss")
+    ax1.axvline(best_epoch, color="green", linestyle="--", alpha=0.8,
+                label=f"Best epoch {best_epoch}")
+    ax1.set_xlabel("Epoch"); ax1.set_ylabel("Loss")
+    ax1.set_title(f"Fold {fold_num} — Loss Curves")
+    ax1.legend(); ax1.grid(True, alpha=0.3)
+
+    ax2.plot(epochs_ran, history["train_f1"], "b-o", ms=3, label="Train Macro-F1")
+    ax2.plot(epochs_ran, history["val_f1"],   "r-o", ms=3, label="Val Macro-F1")
+    ax2.axvline(best_epoch, color="green", linestyle="--", alpha=0.8,
+                label=f"Best epoch {best_epoch}")
+    ax2.axhline(early_stop.best_f1, color="red", linestyle=":", alpha=0.5,
+                label=f"Best F1={early_stop.best_f1:.4f}")
+    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Macro-F1")
+    ax2.set_title(f"Fold {fold_num} — F1 Curves")
+    ax2.legend(); ax2.grid(True, alpha=0.3)
+
+    overfit_gap = best_train_f1 - early_stop.best_f1
+    plt.suptitle(
+        f"Fold {fold_num}/{N_FOLDS}  |  Best Val F1={early_stop.best_f1:.4f} @ ep {best_epoch}"
+        f"  |  Overfit gap={overfit_gap:+.4f}",
+        fontsize=11, fontweight="bold",
+    )
+    plt.tight_layout()
+    plot_path = CHECKPOINT_DIR / f"fold_{fold_num}_curves.png"
+    plt.savefig(plot_path, dpi=100, bbox_inches="tight")
+    plt.show()
+    plt.close()
+    print(f"\n  Plot saved → {plot_path}")
 
 
 # ============================================================
@@ -679,9 +744,66 @@ summary = {
 }
 
 summary_path = CHECKPOINT_DIR / "training_summary_v2.json"
+
+# Remove history from JSON (too large — already saved per-fold plots)
+summary_json = {k: v for k, v in summary.items() if k != "folds"}
+summary_json["folds"] = [
+    {k: v for k, v in r.items() if k != "history"}
+    for r in fold_results
+]
 with open(summary_path, "w") as f:
-    json.dump(summary, f, indent=2)
+    json.dump(summary_json, f, indent=2)
 print(f"\n  Summary saved → {summary_path}")
+
+# ── Summary plots ──────────────────────────────────────────────────────────────
+folds_x   = [f"Fold {r['fold']}" for r in fold_results]
+f1_vals   = [r["val_macro_f1"]     for r in fold_results]
+gaps      = [r["train_f1_at_best"] - r["val_macro_f1"] for r in fold_results]
+best_idx  = int(np.argmax(f1_vals))
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Left: per-fold Val Macro-F1 bar chart
+bar_colors = ["forestgreen" if i == best_idx else "steelblue"
+              for i in range(len(f1_vals))]
+bars = axes[0].bar(folds_x, f1_vals, color=bar_colors, edgecolor="black", linewidth=0.6)
+axes[0].axhline(mean_f1, color="red",    linestyle="--", linewidth=1.5,
+                label=f"Mean={mean_f1:.4f}")
+axes[0].axhline(0.6403,  color="orange", linestyle=":",  linewidth=1.5,
+                label="v1 baseline=0.6403")
+axes[0].set_ylim(0, 1); axes[0].set_ylabel("Val Macro-F1")
+axes[0].set_title("Per-Fold Val Macro-F1  (green = best)")
+axes[0].legend(); axes[0].grid(True, axis="y", alpha=0.3)
+for bar, val in zip(bars, f1_vals):
+    axes[0].text(bar.get_x() + bar.get_width() / 2,
+                 bar.get_height() + 0.01,
+                 f"{val:.4f}", ha="center", va="bottom", fontsize=9)
+
+# Right: overfitting gap (train F1 − val F1 at best epoch)
+gap_colors = ["firebrick" if g > 0.15 else "steelblue" for g in gaps]
+axes[1].bar(folds_x, gaps, color=gap_colors, edgecolor="black", linewidth=0.6)
+axes[1].axhline(0,    color="black",  linewidth=0.8)
+axes[1].axhline(0.15, color="orange", linestyle="--", alpha=0.8,
+                label="Overfit threshold (0.15)")
+axes[1].set_ylabel("Train F1 − Val F1"); axes[1].set_ylim(bottom=0)
+axes[1].set_title("Overfitting Gap at Best Epoch  (lower = better)")
+axes[1].legend(); axes[1].grid(True, axis="y", alpha=0.3)
+for i, (bar, g) in enumerate(zip(axes[1].patches, gaps)):
+    axes[1].text(bar.get_x() + bar.get_width() / 2,
+                 bar.get_height() + 0.005,
+                 f"{g:.3f}", ha="center", va="bottom", fontsize=9)
+
+plt.suptitle(
+    f"5-Fold Summary  |  Mean Val F1={mean_f1:.4f}±{std_f1:.4f}"
+    f"  |  Δ vs v1={delta:+.4f}",
+    fontsize=12, fontweight="bold",
+)
+plt.tight_layout()
+summary_plot_path = CHECKPOINT_DIR / "training_summary_v2.png"
+plt.savefig(summary_plot_path, dpi=100, bbox_inches="tight")
+plt.show()
+plt.close()
+print(f"  Summary plot saved → {summary_plot_path}")
 
 
 # ============================================================
