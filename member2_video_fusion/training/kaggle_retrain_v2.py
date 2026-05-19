@@ -133,7 +133,9 @@ ENCODER_DROPOUT  = 0.3        # Fix 1: was 0.0 in v1
 EARLY_STOP_PAT   = 5          # Fix 2: patience in epochs
 SCHED_PATIENCE   = 3          # Fix 3: ReduceLROnPlateau patience
 SCHED_FACTOR     = 0.5        # halve LR on plateau
-N_FOLDS          = 5
+N_FOLDS              = 5
+TEST_ACTOR_FRACTION  = 0.10   # ~10% of actors held out — never touched until Cell 10
+TEST_RANDOM_SEED     = 42     # fixed seed so test split is reproducible across runs
 
 USE_AMP = torch.cuda.is_available()   # AMP only on CUDA
 
@@ -251,25 +253,78 @@ for emo in EMOTION_LABELS:
 
 
 # ============================================================
-# CELL 5 — Generate 5-fold GroupKFold splits
+# CELL 5 — Carve held-out test set, then 5-fold GroupKFold
 # ============================================================
 
-print(f"\nGenerating {N_FOLDS}-fold actor-independent GroupKFold splits...")
-folds = get_unified_folds(UNIFIED_MANIFEST_PATH, n_splits=N_FOLDS)
+import random
+
+# ── Step 1: stratified actor-level test split ─────────────────────────────────
+# Separate CREMA-D and RAVDESS actors so both sources are represented in test.
+all_actors     = sorted(set(r["actor_id"] for r in unified_rows))
+cremad_actors  = sorted(a for a in all_actors if a < 2000)    # 91 actors
+ravdess_actors = sorted(a for a in all_actors if a >= 2000)   # 24 actors
+
+rng = random.Random(TEST_RANDOM_SEED)
+n_cremad_test  = max(1, round(len(cremad_actors)  * TEST_ACTOR_FRACTION))  # 9
+n_ravdess_test = max(1, round(len(ravdess_actors) * TEST_ACTOR_FRACTION))  # 2
+
+test_cremad_actors  = set(rng.sample(cremad_actors,  n_cremad_test))
+test_ravdess_actors = set(rng.sample(ravdess_actors, n_ravdess_test))
+test_actors         = test_cremad_actors | test_ravdess_actors
+
+test_rows = [r for r in unified_rows if r["actor_id"]     in test_actors]
+cv_rows   = [r for r in unified_rows if r["actor_id"] not in test_actors]
+
+test_src = Counter(r["source"]  for r in test_rows)
+test_emo = Counter(r["emotion"] for r in test_rows)
+cv_src   = Counter(r["source"]  for r in cv_rows)
+
+print(f"Held-out test set (frozen until Cell 10):")
+print(f"  Actors  : {len(test_actors)}  "
+      f"({n_cremad_test} CREMA-D + {n_ravdess_test} RAVDESS)")
+print(f"  Clips   : {len(test_rows)}  {dict(test_src)}")
+print(f"  Emotions: ", end="")
+print({e: test_emo.get(e, 0) for e in ["stress","calm","happy","sad","angry"]})
+
+# Save test manifest — needed to reproduce evaluation in later sessions
+TEST_MANIFEST_PATH = CHECKPOINT_DIR / "test_manifest.csv"
+_fieldnames = ["npy_path", "actor_id", "source", "emotion", "emotion_int"]
+with open(TEST_MANIFEST_PATH, "w", newline="", encoding="utf-8") as _f:
+    _w = csv.DictWriter(_f, fieldnames=_fieldnames)
+    _w.writeheader(); _w.writerows(test_rows)
+print(f"  Saved → {TEST_MANIFEST_PATH}")
+
+print(f"\nCV pool : {len(cv_rows)} clips / "
+      f"{len(set(r['actor_id'] for r in cv_rows))} actors — {dict(cv_src)}")
+
+# ── Step 2: 5-fold GroupKFold on CV pool only ─────────────────────────────────
+print(f"\nGenerating {N_FOLDS}-fold GroupKFold on CV pool...")
+
+_groups = np.array([r["actor_id"] for r in cv_rows])
+_X      = np.arange(len(cv_rows))
+_gkf    = GroupKFold(n_splits=N_FOLDS)
+folds   = []
+
+for _tr_idx, _val_idx in _gkf.split(_X, groups=_groups):
+    folds.append(([cv_rows[i] for i in _tr_idx],
+                  [cv_rows[i] for i in _val_idx]))
 
 for i, (train_rows, val_rows) in enumerate(folds):
     train_actors = set(r["actor_id"] for r in train_rows)
     val_actors   = set(r["actor_id"] for r in val_rows)
     overlap      = train_actors & val_actors
+    # test actors must also be absent from every fold
+    test_leak    = test_actors & train_actors | test_actors & val_actors
     train_src    = Counter(r["source"] for r in train_rows)
     val_src      = Counter(r["source"] for r in val_rows)
-    assert len(overlap) == 0, f"Actor overlap in fold {i+1}!"
+    assert len(overlap)   == 0, f"Train/val actor overlap in fold {i+1}!"
+    assert len(test_leak) == 0, f"Test actor leaked into fold {i+1}!"
     print(f"  Fold {i+1}: train={len(train_rows):>5} clips / {len(train_actors):>3} actors "
           f"{dict(train_src)} | "
           f"val={len(val_rows):>4} clips / {len(val_actors):>3} actors "
           f"{dict(val_src)}")
 
-print(f"\n✓ All {N_FOLDS} folds: no actor overlap")
+print(f"\n✓ All {N_FOLDS} folds: no actor overlap, no test leakage")
 
 
 # ============================================================
@@ -658,35 +713,104 @@ print(f"    - The full run_full_pipeline() export")
 
 
 # ============================================================
-# CELL 10 — Cross-dataset eval scaffold (SAVEE placeholder)
+# CELL 10 — Final evaluation on held-out test set
 # ============================================================
 
 print("\n" + "="*60)
-print("  Cross-Dataset Evaluation Scaffold")
+print("  FINAL TEST SET EVALUATION  (held-out, first time seen)")
 print("="*60)
-print("""
-  To run cross-dataset evaluation on SAVEE (or any held-out corpus):
+print(f"  Test set : {len(test_rows)} clips / {len(test_actors)} actors")
+print(f"  Sources  : {dict(Counter(r['source'] for r in test_rows))}\n")
 
-  1. Add SAVEE as a Kaggle dataset input.
-  2. Extract SAVEE frames with the same YOLO pipeline used for RAVDESS
-     (see kaggle_ravdess_extract.py for the extraction template).
-  3. Load the best checkpoint above:
+# ── Test DataLoader ────────────────────────────────────────────────────────────
+test_ds     = MultiCorpusDataset(test_rows, augment=False, skip_errors=True)
+test_loader = DataLoader(
+    test_ds,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=NUM_WORKERS,
+    pin_memory=(device.type == "cuda"),
+    collate_fn=multicorpus_collate_fn,
+)
 
-     ckpt = torch.load(best_ckpt, map_location=device)
-     model = VideoEmotionModel(pretrained=False, encoder_drop=0.3).to(device)
-     model.load_state_dict(ckpt["model_state_dict"])
+# Class weights from CV pool (same distribution as training — not from test)
+test_class_weights = get_class_weights(cv_rows).to(device)
+test_criterion     = nn.CrossEntropyLoss(
+    weight=test_class_weights, label_smoothing=LABEL_SMOOTHING
+)
 
-  4. Build a SAVEE manifest CSV with the same columns as unified_manifest.csv.
-  5. Create a MultiCorpusDataset(savee_rows, augment=False).
-  6. Run evaluate() on the DataLoader.
-  7. Report macro-F1 — compare to v1's ~0.29 on RAVDESS.
+# ── Evaluate every fold's best checkpoint on test ─────────────────────────────
+per_fold_test_f1 = []
 
-  Expected improvement rationale:
-    - RAVDESS actors in training should directly improve generalisation
-      to RAVDESS-style recordings.
-    - encoder_drop=0.3 reduces CREMA-D-specific texture overfitting.
-    - Color+saturation jitter reduces dataset-specific colour shift.
-    - Rotation ±10° increases robustness to camera angle variation.
-""")
+for fold_r in fold_results:
+    fold_num  = fold_r["fold"]
+    ckpt_path = Path(fold_r["checkpoint"])
 
-print("✓ Retrain v2 complete. All checkpoints saved to /kaggle/working/checkpoints_v2/")
+    ckpt  = torch.load(ckpt_path, map_location=device)
+    model = VideoEmotionModel(
+        pretrained=False, encoder_drop=ENCODER_DROPOUT,
+        lstm_drop=0.3, fc_drop=0.4,
+    ).to(device)
+    model.load_state_dict(ckpt["model_state_dict"])
+
+    _, test_f1, _, _ = evaluate(model, test_loader, test_criterion, device)
+
+    val_f1 = fold_r["val_macro_f1"]
+    gap    = val_f1 - test_f1
+    marker = "⚠" if gap > 0.10 else "✓"
+    print(f"  {marker} Fold {fold_num} | Val F1={val_f1:.4f}  "
+          f"Test F1={test_f1:.4f}  gap={gap:+.4f}")
+    per_fold_test_f1.append(test_f1)
+
+mean_test_f1 = float(np.mean(per_fold_test_f1))
+std_test_f1  = float(np.std(per_fold_test_f1))
+mean_val_f1  = float(np.mean([r["val_macro_f1"] for r in fold_results]))
+val_test_gap = mean_val_f1 - mean_test_f1
+
+print(f"\n  {'─'*50}")
+print(f"  Mean Test  F1 : {mean_test_f1:.4f} ± {std_test_f1:.4f}")
+print(f"  Mean Val   F1 : {mean_val_f1:.4f}  (guided early stopping)")
+print(f"  Val→Test gap  : {val_test_gap:+.4f}  "
+      f"{'(minimal — good generalisation)' if val_test_gap < 0.05 else '(val was optimistic)'}")
+print(f"  v1 baseline   : 0.6403")
+print(f"  Δ vs baseline : {mean_test_f1 - 0.6403:+.4f}")
+print(f"  {'─'*50}")
+
+# ── Full classification report on best checkpoint ─────────────────────────────
+best_fold_r = max(fold_results, key=lambda r: r["val_macro_f1"])
+best_ckpt   = torch.load(Path(best_fold_r["checkpoint"]), map_location=device)
+best_model  = VideoEmotionModel(
+    pretrained=False, encoder_drop=ENCODER_DROPOUT,
+    lstm_drop=0.3, fc_drop=0.4,
+).to(device)
+best_model.load_state_dict(best_ckpt["model_state_dict"])
+
+_, best_test_f1, best_preds, best_labels = evaluate(
+    best_model, test_loader, test_criterion, device
+)
+print(f"\n  Best checkpoint (Fold {best_fold_r['fold']})  "
+      f"Test Macro-F1 = {best_test_f1:.4f}")
+print(f"\n  Classification Report (best checkpoint on test set):\n")
+print(classification_report(
+    best_labels, best_preds,
+    target_names=EMOTION_LABELS, digits=4, zero_division=0,
+))
+
+# ── Save test summary ──────────────────────────────────────────────────────────
+test_summary = {
+    "mean_test_macro_f1":      mean_test_f1,
+    "std_test_macro_f1":       std_test_f1,
+    "mean_val_macro_f1":       mean_val_f1,
+    "val_test_gap":            round(val_test_gap, 4),
+    "best_checkpoint_test_f1": round(best_test_f1, 4),
+    "per_fold_test_f1":        [round(f, 4) for f in per_fold_test_f1],
+    "test_actors":             sorted(test_actors),
+    "n_test_clips":            len(test_rows),
+    "v1_baseline":             0.6403,
+    "delta_vs_baseline":       round(mean_test_f1 - 0.6403, 4),
+}
+test_summary_path = CHECKPOINT_DIR / "test_summary_v2.json"
+with open(test_summary_path, "w") as f:
+    json.dump(test_summary, f, indent=2)
+print(f"  Test summary saved → {test_summary_path}")
+print(f"\n✓ Retrain v2 complete. All outputs in /kaggle/working/checkpoints_v2/")
