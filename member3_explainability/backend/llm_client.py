@@ -158,11 +158,11 @@ def _build_context_block(shap_output: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Gemini call (free tier)
+# OpenRouter call (DeepSeek Chat)
 # ---------------------------------------------------------------------------
 
-async def _call_deepseek(messages: List[dict], system: str) -> str:
-    """Call DeepSeek via OpenRouter (OpenAI-compatible)."""
+async def _call_openrouter(messages: List[dict], system: str) -> str:
+    """Call DeepSeek Chat via OpenRouter."""
     import httpx
 
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -171,11 +171,10 @@ async def _call_deepseek(messages: List[dict], system: str) -> str:
 
     payload = {
         "model": "deepseek/deepseek-chat",
-        "messages": [{"role": "system", "content": system}, *messages],
-        "temperature": 0.7,
+        "messages": [{"role": "system", "content": system}] + messages,
+        "temperature": 0.4,
         "max_tokens": 512,
     }
-
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -396,11 +395,11 @@ async def get_llm_response(
             }
         messages.append({"role": "user", "content": user_message})
 
-    # ── 3. Try DeepSeek ───────────────────────────────────────────────────
+    # ── 3. Try OpenRouter (DeepSeek) ─────────────────────────────────────
     try:
-        return await _call_deepseek(messages, _SYSTEM_PROMPT)
+        return await _call_openrouter(messages, _SYSTEM_PROMPT)
     except Exception as exc:
-        logger.warning("DeepSeek call failed (%s: %s) — using simulated fallback.", type(exc).__name__, exc)
+        logger.warning("OpenRouter call failed (%s: %s) — using simulated fallback.", type(exc).__name__, exc)
 
     # ── 4. Simulated fallback ─────────────────────────────────────────────
     return _simulated_response(shap_output, user_message)
