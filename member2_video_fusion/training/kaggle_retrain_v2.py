@@ -110,8 +110,9 @@ if torch.cuda.is_available():
 # ============================================================
 
 # ── Kaggle dataset paths ───────────────────────────────────────────────────────
-CREMAD_NPY_DIR       = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames")
-CREMAD_MANIFEST_PATH = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames/manifest.csv")
+CREMAD_NPY_DIR        = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames")
+# No manifest CSV — CREMA-D .npy files encode all info in their filenames:
+# {actor_id}_{sentence}_{emotion}_{level}.npy  e.g. 1001_DFA_ANG_XX.npy
 
 # Update this path after committing kaggle_ravdess_extract.py output
 RAVDESS_MANIFEST_PATH = Path("/kaggle/input/datasets/vanaiyan/ravdess-npy-frames/ravdess_manifest.csv")
@@ -155,101 +156,86 @@ print(f"  CHECKPOINT DIR  : {CHECKPOINT_DIR}")
 # CELL 4 — Build unified manifest (CREMA-D + RAVDESS)
 # ============================================================
 
-def build_unified_manifest(
-    cremad_manifest_path: Path,
-    ravdess_manifest_path: Path,
-    output_path: Path,
-) -> list:
-    """Merge CREMA-D and RAVDESS manifests into a single unified CSV.
+# CREMA-D: no manifest CSV — all info is encoded in filenames
+# Format: {actor_id}_{sentence}_{emotion}_{level}.npy
+# e.g.  1001_DFA_ANG_XX.npy
+CREMAD_LABEL_MAP = {
+    "ANG": "angry",
+    "HAP": "happy",
+    "SAD": "sad",
+    "NEU": "calm",
+    "FEA": "stress",
+    # DIS → no clean 5-class mapping → dropped
+}
 
-    CREMA-D manifest CSV is expected to have columns:
-        path (video path), actor_id, emotion, emotion_int, raw_label, ...
-    The .npy path is derived by replacing the video file suffix with .npy
-    and the directory with CREMAD_NPY_DIR.
+# RAVDESS .npy files live in a ravdess_npy/ subfolder inside the dataset.
+# The manifest stored /kaggle/working/ paths from the extraction notebook —
+# remap to the actual input mount path here.
+RAVDESS_NPY_DIR = RAVDESS_MANIFEST_PATH.parent / "ravdess_npy"
 
-    RAVDESS manifest CSV (from kaggle_ravdess_extract.py) has columns:
-        npy_path, actor_id, source, emotion, emotion_int
-
-    Unified manifest columns (written to output_path):
-        npy_path, actor_id, source, emotion, emotion_int
-
-    Returns
-    -------
-    List of unified row dicts.
-    """
+def build_unified_manifest(cremad_npy_dir, ravdess_manifest_path,
+                           output_path, ravdess_npy_dir):
     all_rows = []
 
-    # ── 1. CREMA-D rows ────────────────────────────────────────────────────────
+    # ── 1. CREMA-D: scan directory, parse filenames ────────────────────────────
     cremad_skipped = 0
-    with open(cremad_manifest_path, newline="", encoding="utf-8") as f:
+    for npy_file in sorted(cremad_npy_dir.glob("*.npy")):
+        parts = npy_file.stem.split("_")
+        if len(parts) < 3:
+            cremad_skipped += 1; continue
+        try:
+            actor_id    = int(parts[0])   # e.g. 1001
+            emotion_raw = parts[2]        # e.g. ANG, FEA, DIS
+        except (ValueError, IndexError):
+            cremad_skipped += 1; continue
+        if emotion_raw not in CREMAD_LABEL_MAP:
+            cremad_skipped += 1; continue
+        emotion_str = CREMAD_LABEL_MAP[emotion_raw]
+        all_rows.append({
+            "npy_path":    str(npy_file),
+            "actor_id":    actor_id,
+            "source":      "cremad",
+            "emotion":     emotion_str,
+            "emotion_int": int(EMOTION_CLASSES[emotion_str]),
+        })
+    cremad_total = sum(1 for r in all_rows if r["source"] == "cremad")
+    print(f"  CREMA-D : {cremad_total} rows loaded, {cremad_skipped} skipped (DIS dropped)")
+
+    # ── 2. RAVDESS: read manifest, remap paths to input mount ─────────────────
+    ravdess_total = ravdess_skipped = 0
+    with open(ravdess_manifest_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            emotion_str = row.get("emotion", "").strip().lower()
-            # Skip disgust rows (already filtered in original manifest, but guard)
-            if emotion_str not in EMOTION_CLASSES:
-                cremad_skipped += 1
-                continue
-
-            # Derive .npy path from original video path
-            video_path = Path(row["path"])
-            npy_path   = CREMAD_NPY_DIR / (video_path.stem + ".npy")
-
-            if not npy_path.exists():
-                cremad_skipped += 1
-                continue
-
+            npy_path    = ravdess_npy_dir / Path(row["npy_path"]).name
+            emotion_str = row["emotion"].strip().lower()
+            if not npy_path.exists() or emotion_str not in EMOTION_CLASSES:
+                ravdess_skipped += 1; continue
             all_rows.append({
                 "npy_path":    str(npy_path),
                 "actor_id":    int(row["actor_id"]),
-                "source":      "cremad",
-                "emotion":     emotion_str,
-                "emotion_int": int(EMOTION_CLASSES[emotion_str]),
-            })
-
-    cremad_total = len([r for r in all_rows if r["source"] == "cremad"])
-    print(f"  CREMA-D : {cremad_total} rows loaded, {cremad_skipped} skipped")
-
-    # ── 2. RAVDESS rows ────────────────────────────────────────────────────────
-    ravdess_total   = 0
-    ravdess_skipped = 0
-    with open(ravdess_manifest_path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            npy_path   = Path(row["npy_path"])
-            emotion_str = row["emotion"].strip().lower()
-
-            if not npy_path.exists() or emotion_str not in EMOTION_CLASSES:
-                ravdess_skipped += 1
-                continue
-
-            all_rows.append({
-                "npy_path":    str(npy_path),
-                "actor_id":    int(row["actor_id"]),    # already offset 2001–2024
                 "source":      "ravdess",
                 "emotion":     emotion_str,
                 "emotion_int": int(EMOTION_CLASSES[emotion_str]),
             })
             ravdess_total += 1
-
     print(f"  RAVDESS : {ravdess_total} rows loaded, {ravdess_skipped} skipped")
 
-    # ── 3. Write unified manifest ──────────────────────────────────────────────
     fieldnames = ["npy_path", "actor_id", "source", "emotion", "emotion_int"]
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_rows)
-
     print(f"  Total   : {len(all_rows)} rows → {output_path}")
     return all_rows
 
 
 print("\nBuilding unified manifest...")
 unified_rows = build_unified_manifest(
-    CREMAD_MANIFEST_PATH,
+    CREMAD_NPY_DIR,
     RAVDESS_MANIFEST_PATH,
     UNIFIED_MANIFEST_PATH,
+    ravdess_npy_dir=RAVDESS_NPY_DIR,
 )
 
-# ── Summary stats ──────────────────────────────────────────────────────────────
 src_counts   = Counter(r["source"]  for r in unified_rows)
 emo_counts   = Counter(r["emotion"] for r in unified_rows)
 actor_counts = Counter(r["actor_id"] for r in unified_rows)
