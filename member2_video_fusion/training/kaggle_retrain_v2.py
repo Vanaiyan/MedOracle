@@ -75,6 +75,7 @@ print(f"\nsys.path[0] = /kaggle/working")
 
 import csv
 import json
+import random
 import subprocess
 import time
 from collections import Counter
@@ -88,8 +89,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import classification_report, f1_score
-from sklearn.model_selection import GroupKFold
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, Subset
 
@@ -108,6 +109,17 @@ print(f"  CUDA available  : {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"  GPU             : {torch.cuda.get_device_name(0)}")
     print(f"  VRAM            : {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+
+# ── Reproducibility seeds ──────────────────────────────────────────────────────
+RANDOM_SEED = 42
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(RANDOM_SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark     = False
+print(f"  Random seed fixed: {RANDOM_SEED}")
 
 
 # ============================================================
@@ -142,8 +154,9 @@ N_FOLDS              = 5
 TEST_ACTOR_FRACTION  = 0.10   # ~10% of actors held out — never touched until Cell 10
 TEST_RANDOM_SEED     = 42     # fixed seed so test split is reproducible across runs
 
-USE_AMP        = torch.cuda.is_available()   # AMP only on CUDA
-LABEL_SMOOTHING = 0.1  # applied in CrossEntropyLoss during test evaluation
+USE_AMP         = torch.cuda.is_available()   # AMP only on CUDA
+LABEL_SMOOTHING = 0.1   # applied to training + test CrossEntropyLoss
+GRAD_CLIP       = 1.0   # max gradient norm — prevents LSTM/AMP gradient spikes
 
 # ── Kaggle checkpoint dataset (auto-push after each fold) ─────────────────────
 KAGGLE_USERNAME         = os.environ.get("KAGGLE_USERNAME", "vanaiyan")
@@ -161,6 +174,8 @@ print(f"  LR              : {LR}  WD={WEIGHT_DECAY}")
 print(f"  ENCODER_DROP    : {ENCODER_DROPOUT}  (was 0.0 in v1)")
 print(f"  SCHEDULER       : ReduceLROnPlateau(patience={SCHED_PATIENCE}, factor={SCHED_FACTOR})")
 print(f"  MIXED PRECISION : {USE_AMP}")
+print(f"  GRAD_CLIP       : {GRAD_CLIP}")
+print(f"  LABEL_SMOOTHING : {LABEL_SMOOTHING}  (train + test)")
 print(f"  CHECKPOINT DIR  : {CHECKPOINT_DIR}")
 
 
@@ -266,8 +281,6 @@ for emo in EMOTION_LABELS:
 # CELL 5 — Carve held-out test set, then 5-fold GroupKFold
 # ============================================================
 
-import random
-
 # ── Step 1: stratified actor-level test split ─────────────────────────────────
 # Separate CREMA-D and RAVDESS actors so both sources are represented in test.
 all_actors     = sorted(set(r["actor_id"] for r in unified_rows))
@@ -307,15 +320,17 @@ print(f"  Saved → {TEST_MANIFEST_PATH}")
 print(f"\nCV pool : {len(cv_rows)} clips / "
       f"{len(set(r['actor_id'] for r in cv_rows))} actors — {dict(cv_src)}")
 
-# ── Step 2: 5-fold GroupKFold on CV pool only ─────────────────────────────────
-print(f"\nGenerating {N_FOLDS}-fold GroupKFold on CV pool...")
+# ── Step 2: 5-fold StratifiedGroupKFold on CV pool only ───────────────────────
+# StratifiedGroupKFold guarantees both actor independence AND class balance per fold.
+print(f"\nGenerating {N_FOLDS}-fold StratifiedGroupKFold on CV pool...")
 
-_groups = np.array([r["actor_id"] for r in cv_rows])
+_groups = np.array([r["actor_id"]    for r in cv_rows])
+_y      = np.array([r["emotion_int"] for r in cv_rows])
 _X      = np.arange(len(cv_rows))
-_gkf    = GroupKFold(n_splits=N_FOLDS)
+_gkf    = StratifiedGroupKFold(n_splits=N_FOLDS, shuffle=True, random_state=TEST_RANDOM_SEED)
 folds   = []
 
-for _tr_idx, _val_idx in _gkf.split(_X, groups=_groups):
+for _tr_idx, _val_idx in _gkf.split(_X, y=_y, groups=_groups):
     folds.append(([cv_rows[i] for i in _tr_idx],
                   [cv_rows[i] for i in _val_idx]))
 
@@ -379,12 +394,15 @@ def train_one_epoch(
                 out  = model(clips)
                 loss = criterion(out["logits"], labels)
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)   # unscale before clipping (required for AMP)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             scaler.step(optimizer)
             scaler.update()
         else:
             out  = model(clips)
             loss = criterion(out["logits"], labels)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             optimizer.step()
 
         total_loss += loss.item() * clips.size(0)
@@ -399,16 +417,18 @@ def train_one_epoch(
 
 @torch.no_grad()
 def evaluate(
-    model:     nn.Module,
-    loader:    DataLoader,
-    criterion: nn.Module,
-    device:    torch.device,
-    desc:      str = "Val",
-) -> tuple[float, float, list, list]:
+    model:        nn.Module,
+    loader:       DataLoader,
+    criterion:    nn.Module,
+    device:       torch.device,
+    desc:         str  = "Val",
+    return_probs: bool = False,
+) -> tuple:
     model.eval()
     total_loss = 0.0
     all_preds  = []
     all_labels = []
+    all_probs  = []
 
     pbar = tqdm(loader, desc=desc, leave=False, unit="batch", dynamic_ncols=True)
     for batch in pbar:
@@ -421,10 +441,15 @@ def evaluate(
         total_loss += loss.item() * clips.size(0)
         all_preds.extend(out["predicted_class"].cpu().numpy().tolist())
         all_labels.extend(labels.cpu().numpy().tolist())
+        if return_probs:
+            probs = torch.softmax(out["logits"], dim=1)
+            all_probs.extend(probs.cpu().numpy().tolist())
         pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
     avg_loss = total_loss / len(loader.dataset)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    if return_probs:
+        return avg_loss, macro_f1, all_preds, all_labels, all_probs
     return avg_loss, macro_f1, all_preds, all_labels
 
 
@@ -576,7 +601,7 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
           f"{params['trainable']:,} trainable ({params['trainable_pct']}%)")
 
     # ── Loss, optimiser, scheduler ──────────────────────────────────────────────
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=LABEL_SMOOTHING)
 
     optimizer = optim.AdamW(   # AdamW = Adam + decoupled weight decay (slight improvement)
         model.parameters(),
@@ -688,21 +713,76 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     print(f"\n  Best Fold {fold_num} — Epoch {best_epoch}, "
           f"Val Macro-F1: {early_stop.best_f1:.4f}")
 
-    # Reload best checkpoint for final report
+    # Reload best checkpoint for final report + confusion matrix
     ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
-    _, _, val_preds_best, val_labels_best = evaluate(
-        model, val_loader, criterion, device
+    _, _, val_preds_best, val_labels_best, val_probs_best = evaluate(
+        model, val_loader, criterion, device, return_probs=True
     )
 
-    report = classification_report(
+    report_dict = classification_report(
         val_labels_best, val_preds_best,
         target_names=EMOTION_LABELS,
         digits=4,
         zero_division=0,
+        output_dict=True,
     )
     print(f"\n  Classification Report — Fold {fold_num} (best epoch {best_epoch}):\n")
-    print(report)
+    print(classification_report(
+        val_labels_best, val_preds_best,
+        target_names=EMOTION_LABELS, digits=4, zero_division=0,
+    ))
+    per_class_f1 = {lbl: round(report_dict[lbl]["f1-score"], 4) for lbl in EMOTION_LABELS}
+
+    # ── Confusion matrix ────────────────────────────────────────────────────────
+    cm = confusion_matrix(val_labels_best, val_preds_best)
+    fig_cm, ax_cm = plt.subplots(figsize=(7, 6))
+    im = ax_cm.imshow(cm, interpolation="nearest", cmap="Blues")
+    plt.colorbar(im, ax=ax_cm)
+    ax_cm.set_xticks(range(len(EMOTION_LABELS)))
+    ax_cm.set_yticks(range(len(EMOTION_LABELS)))
+    ax_cm.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+    ax_cm.set_yticklabels(EMOTION_LABELS)
+    thresh = cm.max() / 2
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax_cm.text(j, i, str(cm[i, j]), ha="center", va="center",
+                       color="white" if cm[i, j] > thresh else "black", fontsize=11)
+    ax_cm.set_xlabel("Predicted"); ax_cm.set_ylabel("True")
+    ax_cm.set_title(f"Fold {fold_num} Confusion Matrix (best epoch {best_epoch})",
+                    fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(CHECKPOINT_DIR / f"fold_{fold_num}_confusion_matrix.png", dpi=120)
+    plt.show()
+
+    # ── Normalised confusion matrix (recall per class) ─────────────────────────
+    cm_norm = cm.astype(np.float32) / cm.sum(axis=1, keepdims=True)
+    fig_cmn, ax_cmn = plt.subplots(figsize=(7, 6))
+    im_n = ax_cmn.imshow(cm_norm, interpolation="nearest", cmap="Blues", vmin=0, vmax=1)
+    plt.colorbar(im_n, ax=ax_cmn)
+    ax_cmn.set_xticks(range(len(EMOTION_LABELS)))
+    ax_cmn.set_yticks(range(len(EMOTION_LABELS)))
+    ax_cmn.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+    ax_cmn.set_yticklabels(EMOTION_LABELS)
+    for i in range(cm_norm.shape[0]):
+        for j in range(cm_norm.shape[1]):
+            ax_cmn.text(j, i, f"{cm_norm[i, j]:.2f}", ha="center", va="center",
+                        color="white" if cm_norm[i, j] > 0.5 else "black", fontsize=10)
+    ax_cmn.set_xlabel("Predicted"); ax_cmn.set_ylabel("True")
+    ax_cmn.set_title(f"Fold {fold_num} Normalised Confusion Matrix — Recall per Class",
+                     fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(CHECKPOINT_DIR / f"fold_{fold_num}_confusion_matrix_norm.png", dpi=120)
+    plt.show()
+
+    # ── Save softmax probabilities CSV ──────────────────────────────────────────
+    probs_path = CHECKPOINT_DIR / f"fold_{fold_num}_val_probs.csv"
+    with open(probs_path, "w", newline="", encoding="utf-8") as _f:
+        _w = csv.writer(_f)
+        _w.writerow(["true_label", "pred_label"] + [f"prob_{e}" for e in EMOTION_LABELS])
+        for true, pred, prob in zip(val_labels_best, val_preds_best, val_probs_best):
+            _w.writerow([IDX_TO_EMOTION[true], IDX_TO_EMOTION[pred]] + [f"{p:.6f}" for p in prob])
+    print(f"  Probs saved → {probs_path}")
 
     # ── Per-fold learning curve ──────────────────────────────────────────────────
     eps = list(range(1, len(hist_train_loss) + 1))
@@ -746,6 +826,7 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
         "val_macro_f1":      early_stop.best_f1,
         "train_macro_f1":    best_train_f1_at_best_epoch,
         "overfit_gap":       round(best_train_f1_at_best_epoch - early_stop.best_f1, 4),
+        "per_class_f1":      per_class_f1,
         "checkpoint":        str(ckpt_path),
         "train_clips":       len(train_ds),
         "val_clips":         len(val_ds),
@@ -786,6 +867,10 @@ summary = {
     "std_macro_f1":  std_f1,
     "v1_baseline":   0.6403,
     "delta_vs_v1":   round(delta, 4),
+    "per_class_f1_mean": {
+        lbl: round(float(np.mean([r["per_class_f1"][lbl] for r in fold_results])), 4)
+        for lbl in EMOTION_LABELS
+    },
     "folds":         fold_results,
     "config": {
         "datasets":       ["cremad", "ravdess"],
@@ -963,8 +1048,8 @@ best_model  = VideoEmotionModel(
 ).to(device)
 best_model.load_state_dict(best_ckpt["model_state_dict"])
 
-_, best_test_f1, best_preds, best_labels = evaluate(
-    best_model, test_loader, test_criterion, device
+_, best_test_f1, best_preds, best_labels, best_probs = evaluate(
+    best_model, test_loader, test_criterion, device, return_probs=True
 )
 print(f"\n  Best checkpoint (Fold {best_fold_r['fold']})  "
       f"Test Macro-F1 = {best_test_f1:.4f}")
@@ -973,6 +1058,59 @@ print(classification_report(
     best_labels, best_preds,
     target_names=EMOTION_LABELS, digits=4, zero_division=0,
 ))
+
+# ── Test confusion matrix ──────────────────────────────────────────────────────
+cm_test = confusion_matrix(best_labels, best_preds)
+fig_t, ax_t = plt.subplots(figsize=(7, 6))
+im_t = ax_t.imshow(cm_test, interpolation="nearest", cmap="Oranges")
+plt.colorbar(im_t, ax=ax_t)
+ax_t.set_xticks(range(len(EMOTION_LABELS)))
+ax_t.set_yticks(range(len(EMOTION_LABELS)))
+ax_t.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+ax_t.set_yticklabels(EMOTION_LABELS)
+thresh_t = cm_test.max() / 2
+for i in range(cm_test.shape[0]):
+    for j in range(cm_test.shape[1]):
+        ax_t.text(j, i, str(cm_test[i, j]), ha="center", va="center",
+                  color="white" if cm_test[i, j] > thresh_t else "black", fontsize=11)
+ax_t.set_xlabel("Predicted"); ax_t.set_ylabel("True")
+ax_t.set_title(
+    f"Test Set Confusion Matrix — Fold {best_fold_r['fold']} best checkpoint\n"
+    f"Test Macro-F1 = {best_test_f1:.4f}",
+    fontweight="bold",
+)
+plt.tight_layout()
+plt.savefig(CHECKPOINT_DIR / "test_confusion_matrix.png", dpi=120)
+plt.show()
+
+# ── Normalised test confusion matrix ──────────────────────────────────────────
+cm_test_norm = cm_test.astype(np.float32) / cm_test.sum(axis=1, keepdims=True)
+fig_tn, ax_tn = plt.subplots(figsize=(7, 6))
+im_tn = ax_tn.imshow(cm_test_norm, interpolation="nearest", cmap="Oranges", vmin=0, vmax=1)
+plt.colorbar(im_tn, ax=ax_tn)
+ax_tn.set_xticks(range(len(EMOTION_LABELS)))
+ax_tn.set_yticks(range(len(EMOTION_LABELS)))
+ax_tn.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+ax_tn.set_yticklabels(EMOTION_LABELS)
+for i in range(cm_test_norm.shape[0]):
+    for j in range(cm_test_norm.shape[1]):
+        ax_tn.text(j, i, f"{cm_test_norm[i, j]:.2f}", ha="center", va="center",
+                   color="white" if cm_test_norm[i, j] > 0.5 else "black", fontsize=10)
+ax_tn.set_xlabel("Predicted"); ax_tn.set_ylabel("True")
+ax_tn.set_title("Test Set Normalised Confusion Matrix — Recall per Class",
+                fontweight="bold")
+plt.tight_layout()
+plt.savefig(CHECKPOINT_DIR / "test_confusion_matrix_norm.png", dpi=120)
+plt.show()
+
+# ── Save test softmax probabilities CSV ───────────────────────────────────────
+test_probs_path = CHECKPOINT_DIR / "test_probs.csv"
+with open(test_probs_path, "w", newline="", encoding="utf-8") as _f:
+    _w = csv.writer(_f)
+    _w.writerow(["true_label", "pred_label"] + [f"prob_{e}" for e in EMOTION_LABELS])
+    for true, pred, prob in zip(best_labels, best_preds, best_probs):
+        _w.writerow([IDX_TO_EMOTION[true], IDX_TO_EMOTION[pred]] + [f"{p:.6f}" for p in prob])
+print(f"  Test probs saved → {test_probs_path}")
 
 # ── Save test summary ──────────────────────────────────────────────────────────
 test_summary = {

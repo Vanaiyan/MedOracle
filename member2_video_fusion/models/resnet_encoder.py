@@ -10,10 +10,10 @@ These per-frame features are then fed as a sequence into the BiLSTM.
 
 Fine-tuning strategy (He et al., 2016 — ResNet)
 -------------------------------------------------
-  FROZEN   : layer1, layer2   — keep low-level ImageNet edges/textures
-  TRAINABLE: layer3, layer4   — learn emotion-relevant mid/high-level features
-  TRAINABLE: avgpool          — global average pooling (unchanged architecture)
-  REMOVED  : fc               — original ImageNet 1000-class head, not needed
+  FROZEN   : layer1, layer2, layer3 — keep low/mid-level ImageNet features
+  TRAINABLE: layer4             — learn emotion-relevant high-level features
+  TRAINABLE: avgpool            — global average pooling (unchanged architecture)
+  REMOVED  : fc                 — original ImageNet 1000-class head, not needed
 
 Output per frame: 2048-dim feature vector (avgpool output)
 
@@ -85,8 +85,8 @@ class ResNet50Encoder(nn.Module):
     # ── Freezing ────────────────────────────────────────────────────────────
 
     def _freeze_layers(self) -> None:
-        """Freeze conv1, bn1, layer1, layer2. Everything else stays trainable."""
-        frozen_modules = [self.conv1, self.bn1, self.layer1, self.layer2]
+        """Freeze conv1, bn1, layer1, layer2, layer3. Only layer4 stays trainable."""
+        frozen_modules = [self.conv1, self.bn1, self.layer1, self.layer2, self.layer3]
         for module in frozen_modules:
             for param in module.parameters():
                 param.requires_grad = False
@@ -162,7 +162,7 @@ if __name__ == "__main__":
 
     # ── 1. Parameter summary
     summary = encoder.param_summary()
-    print(f"Parameters:")
+    print("Parameters:")
     print(f"  Total     : {summary['total']:,}")
     print(f"  Trainable : {summary['trainable']:,}  ({summary['trainable_pct']}%)")
     print(f"  Frozen    : {summary['frozen']:,}")
