@@ -75,9 +75,14 @@ print(f"\nsys.path[0] = /kaggle/working")
 
 import csv
 import json
+import subprocess
 import time
 from collections import Counter
 from pathlib import Path
+
+from tqdm.auto import tqdm
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 import numpy as np
 import torch
@@ -137,7 +142,12 @@ N_FOLDS              = 5
 TEST_ACTOR_FRACTION  = 0.10   # ~10% of actors held out — never touched until Cell 10
 TEST_RANDOM_SEED     = 42     # fixed seed so test split is reproducible across runs
 
-USE_AMP = torch.cuda.is_available()   # AMP only on CUDA
+USE_AMP        = torch.cuda.is_available()   # AMP only on CUDA
+LABEL_SMOOTHING = 0.1  # applied in CrossEntropyLoss during test evaluation
+
+# ── Kaggle checkpoint dataset (auto-push after each fold) ─────────────────────
+KAGGLE_USERNAME         = os.environ.get("KAGGLE_USERNAME", "vanaiyan")
+CHECKPOINT_DATASET_SLUG = "medoracle-v2-checkpoints"   # created automatically if absent
 
 EMOTION_LABELS = list(EMOTION_CLASSES.keys())   # ["stress","calm","happy","sad","angry"]
 IDX_TO_EMOTION = {v: k for k, v in EMOTION_CLASSES.items()}
@@ -350,25 +360,17 @@ def train_one_epoch(
     optimizer: optim.Optimizer,
     device:    torch.device,
     scaler,
+    desc:      str = "Train",
 ) -> tuple[float, float]:
-    """Run one training epoch with mixed-precision support.
-
-    Parameters
-    ----------
-    scaler : torch.amp.GradScaler instance (or None if not using AMP)
-
-    Returns
-    -------
-    (avg_loss, macro_f1) for the epoch.
-    """
     model.train()
     total_loss  = 0.0
     all_preds   = []
     all_labels  = []
 
-    for batch in loader:
-        clips  = batch["clip"].to(device)    # (B, T, 3, 224, 224)
-        labels = batch["label"].to(device)   # (B,)
+    pbar = tqdm(loader, desc=desc, leave=False, unit="batch", dynamic_ncols=True)
+    for batch in pbar:
+        clips  = batch["clip"].to(device)
+        labels = batch["label"].to(device)
 
         optimizer.zero_grad()
 
@@ -388,6 +390,7 @@ def train_one_epoch(
         total_loss += loss.item() * clips.size(0)
         all_preds.extend(out["predicted_class"].cpu().numpy().tolist())
         all_labels.extend(labels.cpu().numpy().tolist())
+        pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
     avg_loss = total_loss / len(loader.dataset)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
@@ -400,19 +403,15 @@ def evaluate(
     loader:    DataLoader,
     criterion: nn.Module,
     device:    torch.device,
+    desc:      str = "Val",
 ) -> tuple[float, float, list, list]:
-    """Run validation (no gradients, no AMP).
-
-    Returns
-    -------
-    (avg_loss, macro_f1, all_preds, all_labels)
-    """
     model.eval()
     total_loss = 0.0
     all_preds  = []
     all_labels = []
 
-    for batch in loader:
+    pbar = tqdm(loader, desc=desc, leave=False, unit="batch", dynamic_ncols=True)
+    for batch in pbar:
         clips  = batch["clip"].to(device)
         labels = batch["label"].to(device)
 
@@ -422,6 +421,7 @@ def evaluate(
         total_loss += loss.item() * clips.size(0)
         all_preds.extend(out["predicted_class"].cpu().numpy().tolist())
         all_labels.extend(labels.cpu().numpy().tolist())
+        pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
     avg_loss = total_loss / len(loader.dataset)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
@@ -463,6 +463,55 @@ class EarlyStopping:
             self.counter += 1
             return self.counter >= self.patience   # stop if patience exhausted
 
+
+def init_checkpoint_dataset():
+    """Write dataset-metadata.json and create the Kaggle dataset if it doesn't exist."""
+    meta_path = CHECKPOINT_DIR / "dataset-metadata.json"
+    if not meta_path.exists():
+        meta = {
+            "title": "MedOracle V2 Checkpoints",
+            "id": f"{KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}",
+            "licenses": [{"name": "CC0-1.0"}],
+        }
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+    result = subprocess.run(
+        ["kaggle", "datasets", "create", "-p", str(CHECKPOINT_DIR), "--dir-mode", "tar"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"  ✓ Checkpoint dataset created: {KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}")
+    else:
+        msg = result.stderr.strip()
+        if "already" in msg.lower() or "exists" in msg.lower() or "403" in msg:
+            print(f"  ✓ Dataset already exists — will add a version after each fold")
+        else:
+            print(f"  ⚠ Dataset create note: {msg}")
+
+
+def push_checkpoint_to_kaggle(fold_num: int, val_f1: float):
+    """Push the full checkpoints directory as a new dataset version."""
+    msg = f"fold {fold_num}/{N_FOLDS} complete — val_macro_f1={val_f1:.4f}"
+    print(f"\n  Pushing fold {fold_num} checkpoint to Kaggle …", flush=True)
+    result = subprocess.run(
+        [
+            "kaggle", "datasets", "version",
+            "-p", str(CHECKPOINT_DIR),
+            "-m", msg,
+            "--dir-mode", "tar",
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"  ✓ Dataset updated → {KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}")
+    else:
+        print(f"  ⚠ Kaggle push failed (checkpoint is still at {CHECKPOINT_DIR}):")
+        print(f"    {result.stderr.strip()}")
+
+
+# Create the dataset now so the first fold's push uses "version" not "create"
+init_checkpoint_dataset()
 
 print("✓ Training helpers defined")
 
@@ -553,19 +602,32 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     ckpt_path  = CHECKPOINT_DIR / f"fold_{fold_num}_best.pt"
     best_epoch = 0
 
+    # Per-epoch history for learning curve plots
+    hist_train_loss, hist_val_loss = [], []
+    hist_train_f1,   hist_val_f1   = [], []
+
     print(f"\n  {'Ep':>3}  {'Train Loss':>10}  {'Train F1':>8}  "
           f"{'Val Loss':>8}  {'Val F1':>6}  {'LR':>8}  {'ES':>5}  {'Δ'}")
     print(f"  {'─'*72}")
 
     # ── Epoch loop ──────────────────────────────────────────────────────────────
-    for epoch in range(1, MAX_EPOCHS + 1):
+    epoch_bar = tqdm(
+        range(1, MAX_EPOCHS + 1),
+        desc=f"Fold {fold_num}/{N_FOLDS}",
+        unit="ep",
+        leave=True,
+        dynamic_ncols=True,
+    )
+    for epoch in epoch_bar:
         t0 = time.time()
 
         train_loss, train_f1 = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, scaler
+            model, train_loader, criterion, optimizer, device, scaler,
+            desc=f"  Ep {epoch:02d} Train",
         )
         val_loss, val_f1, val_preds, val_labels = evaluate(
-            model, val_loader, criterion, device
+            model, val_loader, criterion, device,
+            desc=f"  Ep {epoch:02d} Val  ",
         )
 
         # Scheduler step (Fix 3)
@@ -597,15 +659,29 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
             }, ckpt_path)
 
         elapsed = time.time() - t0
+        hist_train_loss.append(train_loss)
+        hist_val_loss.append(val_loss)
+        hist_train_f1.append(train_f1)
+        hist_val_f1.append(val_f1)
+
         print(f"  {epoch:>3}  {train_loss:>10.4f}  {train_f1:>8.4f}  "
               f"{val_loss:>8.4f}  {val_f1:>6.4f}  {current_lr:>8.2e}  "
               f"{early_stop.counter:>2}/{EARLY_STOP_PAT}  "
               f"{marker}  ({elapsed:.0f}s)")
 
+        epoch_bar.set_postfix({
+            "tr_f1": f"{train_f1:.3f}",
+            "vl_f1": f"{val_f1:.3f}",
+            "best":  f"{early_stop.best_f1:.3f}",
+            "ES":    f"{early_stop.counter}/{EARLY_STOP_PAT}",
+            "lr":    f"{current_lr:.1e}",
+        })
+
         if stop:
             print(f"\n  → Early stopping at epoch {epoch} "
                   f"(best was epoch {early_stop.best_epoch}, "
                   f"F1={early_stop.best_f1:.4f})")
+            epoch_bar.close()
             break
 
     # ── Per-fold classification report ──────────────────────────────────────────
@@ -628,14 +704,55 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     print(f"\n  Classification Report — Fold {fold_num} (best epoch {best_epoch}):\n")
     print(report)
 
+    # ── Per-fold learning curve ──────────────────────────────────────────────────
+    eps = list(range(1, len(hist_train_loss) + 1))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4))
+
+    ax1.plot(eps, hist_train_loss, label="Train Loss", color="steelblue",  linewidth=2)
+    ax1.plot(eps, hist_val_loss,   label="Val Loss",   color="darkorange", linewidth=2)
+    ax1.axvline(best_epoch, color="green", linestyle="--", alpha=0.8,
+                label=f"Best epoch {best_epoch}")
+    ax1.set_title(f"Fold {fold_num} — Loss")
+    ax1.set_xlabel("Epoch"); ax1.set_ylabel("Cross-Entropy Loss")
+    ax1.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax1.legend(); ax1.grid(alpha=0.3)
+
+    ax2.plot(eps, hist_train_f1, label="Train Macro-F1", color="steelblue",  linewidth=2)
+    ax2.plot(eps, hist_val_f1,   label="Val Macro-F1",   color="darkorange", linewidth=2)
+    ax2.axvline(best_epoch, color="green", linestyle="--", alpha=0.8,
+                label=f"Best epoch {best_epoch}")
+    ax2.axhline(early_stop.best_f1, color="red", linestyle=":", alpha=0.7,
+                label=f"Best val F1 = {early_stop.best_f1:.4f}")
+    ax2.set_title(f"Fold {fold_num} — Macro F1")
+    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Macro-Averaged F1")
+    ax2.set_ylim(0, 1)
+    ax2.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax2.legend(); ax2.grid(alpha=0.3)
+
+    plt.suptitle(
+        f"Fold {fold_num}/{N_FOLDS} Learning Curves  |  "
+        f"Best val F1 = {early_stop.best_f1:.4f} @ epoch {best_epoch}",
+        fontsize=12, fontweight="bold",
+    )
+    plt.tight_layout()
+    plt.savefig(CHECKPOINT_DIR / f"fold_{fold_num}_learning_curve.png", dpi=120)
+    plt.show()
+
+    best_train_f1_at_best_epoch = hist_train_f1[best_epoch - 1] if hist_train_f1 else 0.0
+
     fold_results.append({
-        "fold":         fold_num,
-        "best_epoch":   best_epoch,
-        "val_macro_f1": early_stop.best_f1,
-        "checkpoint":   str(ckpt_path),
-        "train_clips":  len(train_ds),
-        "val_clips":    len(val_ds),
+        "fold":              fold_num,
+        "best_epoch":        best_epoch,
+        "val_macro_f1":      early_stop.best_f1,
+        "train_macro_f1":    best_train_f1_at_best_epoch,
+        "overfit_gap":       round(best_train_f1_at_best_epoch - early_stop.best_f1, 4),
+        "checkpoint":        str(ckpt_path),
+        "train_clips":       len(train_ds),
+        "val_clips":         len(val_ds),
     })
+
+    # ── Auto-push checkpoint to Kaggle so it survives session timeout ───────────
+    push_checkpoint_to_kaggle(fold_num, early_stop.best_f1)
 
 
 # ============================================================
@@ -691,6 +808,67 @@ summary_path = CHECKPOINT_DIR / "training_summary_v2.json"
 with open(summary_path, "w") as f:
     json.dump(summary, f, indent=2)
 print(f"\n  Summary saved → {summary_path}")
+
+# ── Summary charts ───────────────────────────────────────────────────────────
+folds_x      = [r["fold"]         for r in fold_results]
+val_f1s      = [r["val_macro_f1"] for r in fold_results]
+train_f1s    = [r["train_macro_f1"] for r in fold_results]
+overfit_gaps = [r["overfit_gap"]   for r in fold_results]
+best_epochs  = [r["best_epoch"]    for r in fold_results]
+
+fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+# Chart 1: Val F1 per fold (bar chart)
+bars = axes[0].bar(folds_x, val_f1s, color="steelblue", alpha=0.85, edgecolor="navy", zorder=3)
+axes[0].axhline(mean_f1,  color="crimson",    linestyle="--", linewidth=2,
+                label=f"Mean = {mean_f1:.4f} ± {std_f1:.4f}")
+axes[0].axhline(0.6403,   color="gray",       linestyle=":",  linewidth=1.5,
+                label="v1 baseline = 0.6403")
+for bar, v in zip(bars, val_f1s):
+    axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.008,
+                 f"{v:.4f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+axes[0].set_ylim(0, 1.05)
+axes[0].set_xlabel("Fold"); axes[0].set_ylabel("Val Macro F1")
+axes[0].set_title("Val Macro F1 per Fold", fontweight="bold")
+axes[0].set_xticks(folds_x)
+axes[0].legend(fontsize=8); axes[0].grid(axis="y", alpha=0.4, zorder=0)
+
+# Chart 2: Train vs Val F1 (overfitting view)
+x = np.arange(len(folds_x))
+w = 0.35
+axes[1].bar(x - w/2, train_f1s, w, label="Train F1", color="steelblue",  alpha=0.85, edgecolor="navy")
+axes[1].bar(x + w/2, val_f1s,   w, label="Val F1",   color="darkorange", alpha=0.85, edgecolor="saddlebrown")
+axes[1].set_ylim(0, 1.05)
+axes[1].set_xlabel("Fold"); axes[1].set_ylabel("Macro F1")
+axes[1].set_title("Train vs Val F1 (Overfitting View)", fontweight="bold")
+axes[1].set_xticks(x); axes[1].set_xticklabels([f"F{f}" for f in folds_x])
+axes[1].legend(); axes[1].grid(axis="y", alpha=0.4)
+for i, gap in enumerate(overfit_gaps):
+    axes[1].text(i, max(train_f1s[i], val_f1s[i]) + 0.015,
+                 f"gap\n{gap:+.3f}", ha="center", fontsize=8, color="dimgray")
+
+# Chart 3: Best epoch per fold
+axes[2].bar(folds_x, best_epochs, color="mediumseagreen", alpha=0.85, edgecolor="darkgreen", zorder=3)
+axes[2].axhline(MAX_EPOCHS, color="red", linestyle="--", linewidth=1.5,
+                label=f"Max epochs = {MAX_EPOCHS}")
+for i, (x_pos, ep) in enumerate(zip(folds_x, best_epochs)):
+    axes[2].text(x_pos, ep + 0.3, str(ep), ha="center", fontsize=10, fontweight="bold")
+axes[2].set_ylim(0, MAX_EPOCHS + 3)
+axes[2].set_xlabel("Fold"); axes[2].set_ylabel("Best Epoch")
+axes[2].set_title("Best Epoch per Fold\n(lower = earlier stopping)", fontweight="bold")
+axes[2].set_xticks(folds_x)
+axes[2].legend(fontsize=8); axes[2].grid(axis="y", alpha=0.4, zorder=0)
+
+plt.suptitle(
+    f"MedOracle v2 — 5-Fold Training Summary\n"
+    f"Mean Val Macro-F1 = {mean_f1:.4f} ± {std_f1:.4f}   |   "
+    f"v1 baseline = 0.6403   |   Δ = {delta:+.4f}",
+    fontsize=12, fontweight="bold",
+)
+plt.tight_layout()
+plt.savefig(CHECKPOINT_DIR / "training_summary_v2.png", dpi=120)
+plt.show()
+print(f"  Summary chart saved → {CHECKPOINT_DIR / 'training_summary_v2.png'}")
 
 
 # ============================================================
