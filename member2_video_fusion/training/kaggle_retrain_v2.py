@@ -9,14 +9,23 @@ Retrain v2: CREMA-D + RAVDESS unified 5-fold training
 Prerequisite: run kaggle_ravdess_extract.py first and commit its output
 as a Kaggle dataset, then update RAVDESS_MANIFEST_PATH below.
 
-What changed vs the v1 training (0.6403 mean F1)
--------------------------------------------------
-  Fix 1  encoder_drop=0.3        — regularise the largest sub-network
-  Fix 2  early stopping p=5      — stop before overfitting, not after
-  Fix 3  ReduceLROnPlateau p=3   — decay LR when val_F1 stagnates
-  Fix 4  augmentation            — flip + color jitter (with saturation) + rotation ±10°
-  Fix 5  CREMA-D + RAVDESS       — 115 actors across two recording styles
-  Fix 6  mixed precision (AMP)   — same as before, kept from v1
+What changed in v3.1 (the middle path — fixes both over- and under-fitting)
+---------------------------------------------------------------------------
+  v2  fully fine-tuned layer4 @ 1e-4 → memorised actors (train 0.88 / val 0.63).
+  v3  froze the WHOLE backbone        → underfit badly (train≈val≈0.30, random-ish).
+  v3.1 keeps layer4 trainable but SLOW, with strong regularisation:
+
+  Fix 1  Discriminative LR       — layer4 conv @ 1e-5 (adapts to faces slowly,
+                                   can't memorise); BiLSTM head @ 5e-4 (learns fast).
+  Fix 2  Frozen-BatchNorm        — all backbone BN kept in eval() so running stats
+                                   never drift → smooth validation curves.
+  Fix 3  BiLSTM mean-pooling     — average over all 16 timesteps instead of the
+                                   last hidden state (uses both directions fully).
+  Fix 4  Cutout + stronger jitter— random erasing (p=0.5) + ±30% colour jitter
+                                   break actor-identity shortcuts.
+  Fix 5  Cosine LR + warmup      — replaces ReduceLROnPlateau; smoother descent.
+  Fix 6  weight_decay 5e-4, fc_drop 0.4 — regularise without choking learning.
+  Kept   StratifiedGroupKFold, label smoothing 0.1, grad clip 1.0, seeds, AMP.
 
 Kaggle dataset paths (update these to match your actual dataset slugs)
 ----------------------------------------------------------------------
@@ -28,12 +37,12 @@ Kaggle dataset paths (update these to match your actual dataset slugs)
 Training setup
 --------------
   Dataset    : CREMA-D (91 actors) + RAVDESS (24 actors) = 115 actors
-  Folds      : 5-fold actor-independent GroupKFold
+  Folds      : 5-fold actor-independent StratifiedGroupKFold
   Batch size : 16
   Max epochs : 30  (early stopping will likely trigger sooner)
-  LR         : 1e-4  (AdamW with weight decay 1e-4)
-  Scheduler  : ReduceLROnPlateau (patience=3, factor=0.5, mode=max)
-  Early stop : patience=5 on val_macro_f1 (no improvement → stop)
+  LR         : head 5e-4 / layer4 backbone 1e-5  (AdamW, weight decay 5e-4)
+  Scheduler  : LinearLR warmup (3 ep) → CosineAnnealingLR (smooth descent)
+  Early stop : patience=8 on val_macro_f1 (no improvement → stop)
   Metric     : Macro-averaged F1 (primary, handles class imbalance)
   Loss       : Weighted cross-entropy (balanced class weights per fold)
   AMP        : torch.amp.autocast + GradScaler (CUDA only)
@@ -143,13 +152,15 @@ UNIFIED_MANIFEST_PATH = Path("/kaggle/working/unified_manifest.csv")
 # ── Hyperparameters ────────────────────────────────────────────────────────────
 BATCH_SIZE       = 16
 MAX_EPOCHS       = 30         # early stopping will fire before this in most folds
-LR               = 1e-4
-WEIGHT_DECAY     = 1e-4
+BACKBONE_LR      = 1e-5       # v3.1: layer4 adapts SLOWLY → can't memorise actors
+HEAD_LR          = 5e-4       # v3.1: BiLSTM head learns fast (was 1e-4, too slow)
+WEIGHT_DECAY     = 5e-4       # v3: stronger weight decay (was 1e-4)
 NUM_WORKERS      = 2          # Kaggle T4 can handle 2 workers
-ENCODER_DROPOUT  = 0.3        # Fix 1: was 0.0 in v1
-EARLY_STOP_PAT   = 5          # Fix 2: patience in epochs
-SCHED_PATIENCE   = 3          # Fix 3: ReduceLROnPlateau patience
-SCHED_FACTOR     = 0.5        # halve LR on plateau
+ENCODER_DROPOUT  = 0.0        # dropout on encoder output (BN frozen, kept 0)
+LSTM_DROPOUT     = 0.3        # dropout between BiLSTM layers
+FC_DROPOUT       = 0.4        # v3.1: eased from 0.5 (was underfitting with full freeze)
+EARLY_STOP_PAT   = 8          # more patience (cosine LR needs room to anneal)
+WARMUP_EPOCHS    = 3          # linear LR warmup before cosine annealing
 N_FOLDS              = 5
 TEST_ACTOR_FRACTION  = 0.10   # ~10% of actors held out — never touched until Cell 10
 TEST_RANDOM_SEED     = 42     # fixed seed so test split is reproducible across runs
@@ -170,9 +181,10 @@ print(f"  MedOracle — VideoEmotionModel Retrain v2")
 print(f"{'='*60}")
 print(f"  MAX_EPOCHS      : {MAX_EPOCHS} (early-stopping patience={EARLY_STOP_PAT})")
 print(f"  BATCH_SIZE      : {BATCH_SIZE}")
-print(f"  LR              : {LR}  WD={WEIGHT_DECAY}")
-print(f"  ENCODER_DROP    : {ENCODER_DROPOUT}  (was 0.0 in v1)")
-print(f"  SCHEDULER       : ReduceLROnPlateau(patience={SCHED_PATIENCE}, factor={SCHED_FACTOR})")
+print(f"  LR (head/backbone): {HEAD_LR} / {BACKBONE_LR}   WD={WEIGHT_DECAY}")
+print(f"  ENCODER         : layer4 conv trainable @ {BACKBONE_LR} (BN frozen); layer1-3 frozen")
+print(f"  FC_DROPOUT      : {FC_DROPOUT}   LSTM_DROPOUT: {LSTM_DROPOUT}")
+print(f"  SCHEDULER       : cosine annealing + {WARMUP_EPOCHS}-epoch linear warmup")
 print(f"  MIXED PRECISION : {USE_AMP}")
 print(f"  GRAD_CLIP       : {GRAD_CLIP}")
 print(f"  LABEL_SMOOTHING : {LABEL_SMOOTHING}  (train + test)")
@@ -548,10 +560,52 @@ print("✓ Training helpers defined")
 device = VideoEmotionModel.get_device()
 print(f"\nDevice: {device}")
 
+# ── Resume support ──────────────────────────────────────────────────────────────
+# Each completed fold saves fold_{n}_best.pt + fold_{n}_result.json and pushes the
+# whole dir to Kaggle. A 5-fold run (~13 h) does not fit one 12 h Kaggle session,
+# so we resume across sessions: pull the latest checkpoint dataset into the working
+# dir, then skip any fold that already has both its checkpoint and result JSON.
+RESUME = True   # set False to force every fold to retrain from scratch
+if RESUME:
+    print("\nResume: pulling any existing checkpoints from Kaggle …")
+    _dl = subprocess.run(
+        ["kaggle", "datasets", "download",
+         "-d", f"{KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}",
+         "-p", str(CHECKPOINT_DIR), "--unzip"],
+        capture_output=True, text=True,
+    )
+    # The dataset was created with --dir-mode tar, so --unzip may leave a *.tar
+    # (or *.tar.gz) archive behind — unpack it so the .pt / .json files appear.
+    import tarfile
+    for _arch in list(CHECKPOINT_DIR.glob("*.tar")) + list(CHECKPOINT_DIR.glob("*.tar.gz")):
+        try:
+            with tarfile.open(_arch) as _t:
+                _t.extractall(CHECKPOINT_DIR)
+            _arch.unlink()
+        except Exception as _e:
+            print(f"  ⚠ Could not unpack {_arch.name}: {_e}")
+    if _dl.returncode == 0:
+        _done = sorted(CHECKPOINT_DIR.glob("fold_*_result.json"))
+        print(f"  ✓ Restored — found {len(_done)} completed-fold result file(s): "
+              f"{[p.name for p in _done]}")
+    else:
+        print(f"  ⚠ Nothing restored (first run, or download failed) — starting fresh")
+
 fold_results = []
 
 for fold_idx, (train_rows, val_rows) in enumerate(folds):
     fold_num = fold_idx + 1
+
+    # ── Skip folds already completed in a previous session ──────────────────────
+    result_json = CHECKPOINT_DIR / f"fold_{fold_num}_result.json"
+    ckpt_file   = CHECKPOINT_DIR / f"fold_{fold_num}_best.pt"
+    if RESUME and result_json.exists() and ckpt_file.exists():
+        with open(result_json) as _f:
+            prior = json.load(_f)
+        fold_results.append(prior)
+        print(f"\n  ⏩ Fold {fold_num}/{N_FOLDS} already complete "
+              f"(val_macro_f1={prior['val_macro_f1']:.4f}) — skipping")
+        continue
 
     print(f"\n{'='*60}")
     print(f"  FOLD {fold_num}/{N_FOLDS}   "
@@ -588,12 +642,12 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     )
 
     # ── Model ───────────────────────────────────────────────────────────────────
-    # Fix 1: encoder_drop=0.3 (was 0.0 in v1)
+    # v3: ResNet backbone fully frozen inside VideoEmotionModel; only BiLSTM trains
     model = VideoEmotionModel(
         pretrained=True,
         encoder_drop=ENCODER_DROPOUT,
-        lstm_drop=0.3,
-        fc_drop=0.4,
+        lstm_drop=LSTM_DROPOUT,
+        fc_drop=FC_DROPOUT,
     ).to(device)
 
     params = model.param_summary()
@@ -603,19 +657,34 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     # ── Loss, optimiser, scheduler ──────────────────────────────────────────────
     criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=LABEL_SMOOTHING)
 
-    optimizer = optim.AdamW(   # AdamW = Adam + decoupled weight decay (slight improvement)
-        model.parameters(),
-        lr=LR,
+    # v3.1: discriminative LRs — layer4 backbone adapts slowly, head learns fast
+    backbone_params = [p for n, p in model.named_parameters()
+                       if p.requires_grad and n.startswith("encoder.")]
+    head_params     = [p for n, p in model.named_parameters()
+                       if p.requires_grad and not n.startswith("encoder.")]
+    n_bb = sum(p.numel() for p in backbone_params)
+    n_hd = sum(p.numel() for p in head_params)
+    print(f"  Trainable split: layer4 backbone {n_bb:,} @ lr={BACKBONE_LR}  |  "
+          f"head {n_hd:,} @ lr={HEAD_LR}")
+
+    optimizer = optim.AdamW(
+        [
+            {"params": backbone_params, "lr": BACKBONE_LR},
+            {"params": head_params,     "lr": HEAD_LR},
+        ],
+        lr=HEAD_LR,          # default (each group overrides with its own lr)
         weight_decay=WEIGHT_DECAY,
     )
 
-    # Fix 3: ReduceLROnPlateau on val_macro_f1
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="max",
-        patience=SCHED_PATIENCE,
-        factor=SCHED_FACTOR,
-        min_lr=1e-6,
+    # v3: linear warmup → cosine annealing (smoother than step-drops on plateau)
+    warmup_sched = optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, total_iters=WARMUP_EPOCHS,
+    )
+    cosine_sched = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, MAX_EPOCHS - WARMUP_EPOCHS), eta_min=1e-6,
+    )
+    scheduler = optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[WARMUP_EPOCHS],
     )
 
     # Fix 6: AMP GradScaler (CUDA only)
@@ -655,9 +724,9 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
             desc=f"  Ep {epoch:02d} Val  ",
         )
 
-        # Scheduler step (Fix 3)
-        scheduler.step(val_f1)
-        current_lr = optimizer.param_groups[0]["lr"]
+        # Scheduler step (cosine + warmup — stepped once per epoch, no metric arg)
+        scheduler.step()
+        current_lr = optimizer.param_groups[-1]["lr"]   # head LR (group 0 is backbone)
 
         # Early stopping check (Fix 2)
         stop = early_stop.step(val_f1, epoch)
@@ -678,7 +747,8 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
                 "config": {
                     "encoder_drop": ENCODER_DROPOUT,
                     "batch_size":   BATCH_SIZE,
-                    "lr":           LR,
+                    "head_lr":      HEAD_LR,
+                    "backbone_lr":  BACKBONE_LR,
                     "weight_decay": WEIGHT_DECAY,
                 },
             }, ckpt_path)
@@ -832,6 +902,10 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
         "val_clips":         len(val_ds),
     })
 
+    # ── Persist this fold's result so a later session can skip it (resume) ──────
+    with open(CHECKPOINT_DIR / f"fold_{fold_num}_result.json", "w") as _f:
+        json.dump(fold_results[-1], _f, indent=2)
+
     # ── Auto-push checkpoint to Kaggle so it survives session timeout ───────────
     push_checkpoint_to_kaggle(fold_num, early_stop.best_f1)
 
@@ -877,13 +951,16 @@ summary = {
         "n_actors":       115,
         "batch_size":     BATCH_SIZE,
         "max_epochs":     MAX_EPOCHS,
-        "lr":             LR,
+        "head_lr":        HEAD_LR,
+        "backbone_lr":    BACKBONE_LR,
         "weight_decay":   WEIGHT_DECAY,
-        "encoder_drop":   ENCODER_DROPOUT,
+        "encoder":        "layer4_conv_trainable_lowLR_BNfrozen",
+        "fc_dropout":     FC_DROPOUT,
+        "lstm_dropout":   LSTM_DROPOUT,
         "early_stop_pat": EARLY_STOP_PAT,
-        "sched_patience": SCHED_PATIENCE,
-        "sched_factor":   SCHED_FACTOR,
-        "augmentation":   "flip+colorjitter+rotation10deg",
+        "scheduler":      f"cosine+warmup{WARMUP_EPOCHS}",
+        "bilstm_pooling": "mean_over_timesteps",
+        "augmentation":   "flip+colorjitter0.3+rotation10+cutout",
         "use_amp":        USE_AMP,
         "device":         str(device),
     },
@@ -1012,7 +1089,7 @@ for fold_r in fold_results:
     ckpt  = torch.load(ckpt_path, map_location=device)
     model = VideoEmotionModel(
         pretrained=False, encoder_drop=ENCODER_DROPOUT,
-        lstm_drop=0.3, fc_drop=0.4,
+        lstm_drop=LSTM_DROPOUT, fc_drop=FC_DROPOUT,
     ).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
 
@@ -1044,7 +1121,7 @@ best_fold_r = max(fold_results, key=lambda r: r["val_macro_f1"])
 best_ckpt   = torch.load(Path(best_fold_r["checkpoint"]), map_location=device)
 best_model  = VideoEmotionModel(
     pretrained=False, encoder_drop=ENCODER_DROPOUT,
-    lstm_drop=0.3, fc_drop=0.4,
+    lstm_drop=LSTM_DROPOUT, fc_drop=FC_DROPOUT,
 ).to(device)
 best_model.load_state_dict(best_ckpt["model_state_dict"])
 
