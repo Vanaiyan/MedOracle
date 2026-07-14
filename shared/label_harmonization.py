@@ -53,7 +53,7 @@ EMOTION_CLASSES: dict[str, int] = {
     "angry":  4,
 }
 
-_THRESHOLD = 5.0   # midpoint of the 1–9 DEAP rating scale
+_THRESHOLD = 4.5   # lowered from 5.0 to increase happy class representation
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ def map_deap_to_class(
     'sad'
     >>> map_deap_to_class(2.0, 7.0, 7.0)
     'angry'
-    >>> map_deap_to_class(5.0, 5.0, 5.0)   # boundary → positive side
+    >>> map_deap_to_class(4.5, 4.5, 4.5)   # boundary → positive side
     'happy'
     """
     _validate_deap_range(valence,   "valence")
