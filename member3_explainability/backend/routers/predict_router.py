@@ -27,7 +27,9 @@ from member3_explainability.backend.schemas import (
 )
 from member3_explainability.shap.shap_output_builder import build_shap_output
 from member3_explainability.shap.synthetic_data import generate_prediction_output, EMOTIONS
-from member2_video_fusion.inference import predict_video
+# NOTE: member2_video_fusion.inference (predict_video) is imported lazily inside
+# the /predict/video handler so the API can boot without Member 2's video stack
+# (torchvision etc.) installed. Only the video endpoint requires it.
 
 _ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".webm"}
 
@@ -196,6 +198,15 @@ async def predict_from_video(
 
     try:
         try:
+            try:
+                from member2_video_fusion.inference import predict_video
+            except ImportError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=("Video inference is unavailable: Member 2's video stack "
+                            f"is not installed ({exc}). Install torchvision + "
+                            "member2_video_fusion to enable /predict/video."),
+                )
             prediction_output = predict_video(tmp_path)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))

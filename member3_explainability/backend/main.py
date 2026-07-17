@@ -25,6 +25,7 @@ from member3_explainability.backend.routers import (
     sessions_router,
     chat_router,
     dashboard_router,
+    conflict_router,
 )
 
 
@@ -81,6 +82,7 @@ app.include_router(predict_router.router)
 app.include_router(sessions_router.router)
 app.include_router(chat_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(conflict_router.router)
 
 
 # ---------------------------------------------------------------------------
