@@ -8,9 +8,10 @@ import NavBar from '../components/NavBar';
 import StatCards from '../components/StatCards';
 import EmotionTrendChart from '../components/EmotionTrendChart';
 import SHAPBarChart from '../components/SHAPBarChart';
+import ConflictExplanationPanel from '../components/ConflictExplanationPanel';
 import SessionHistoryPanel from '../components/SessionHistoryPanel';
 import ChatbotPanel from '../components/ChatbotPanel';
-import { dashboardAPI, sessionsAPI, predictAPI } from '../api/client';
+import { dashboardAPI, sessionsAPI, predictAPI, conflictAPI } from '../api/client';
 import { chatAPI } from '../api/client';
 
 const QUALITY_OPTIONS = ['good', 'degraded', 'poor'];
@@ -146,6 +147,22 @@ export default function Dashboard() {
     }
   };
 
+  // Generate a CONFLICT session (physio != video) and select it so the
+  // Modality-Conflict panel explains a real disagreement.
+  const runConflictPrediction = async () => {
+    setRunningPrediction(true);
+    try {
+      const { data } = await conflictAPI.generate();
+      setActiveSessionId(data.session_id);
+      setAutoExplanation(null);
+      loadSummary();
+    } catch (e) {
+      console.error('Conflict prediction failed:', e);
+    } finally {
+      setRunningPrediction(false);
+    }
+  };
+
   // Run synthetic prediction (backend generates randomised fused output)
   const runDemoPrediction = async () => {
     setRunningPrediction(true);
@@ -212,6 +229,26 @@ export default function Dashboard() {
                 disabled={runningPrediction}
               >
                 {runningPrediction ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Running…</> : '▶ Run Prediction'}
+              </button>
+              <button
+                id="run-conflict-btn"
+                className="btn"
+                style={{
+                  background: 'linear-gradient(135deg, #f6ad55 0%, #ed8936 50%, #dd6b20 100%)',
+                  border: '1px solid #dd6b20',
+                  color: '#ffffff',
+                  fontWeight: 600,
+                }}
+                onClick={runConflictPrediction}
+                disabled={runningPrediction}
+                title="Generate a session where physiology and video disagree"
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <svg width="12" height="14" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true">
+                    <path d="M13 2 L3 14 h7 l-1 8 L21 10 h-7 z" />
+                  </svg>
+                  New conflict session
+                </span>
               </button>
             </div>
           </div>
@@ -305,6 +342,11 @@ export default function Dashboard() {
               featureImportance={shap?.feature_importance}
               faithfulness={shap?.faithfulness_score}
             />
+          </div>
+
+          {/* Modality-Conflict Explanation (Member 3 novel contribution) */}
+          <div style={{ marginTop: '1rem' }}>
+            <ConflictExplanationPanel sessionId={activeSessionId} />
           </div>
 
           {/* Session detail card */}

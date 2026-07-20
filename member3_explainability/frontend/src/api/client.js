@@ -83,6 +83,14 @@ export const predictAPI = {
   explain:          (session_id) => api.get(`/explain/${session_id}`),
 };
 
+export const conflictAPI = {
+  explain:        (payload) => api.post('/explain/conflict', payload),
+  explainSession: (id)      => api.get(`/explain/conflict/${id}`),
+  generate:       (physio, video) => api.post(
+    `/predict/conflict${physio && video ? `?physio_emotion=${physio}&video_emotion=${video}` : ''}`
+  ),
+};
+
 export const sessionsAPI = {
   list:   ()   => api.get('/sessions'),
   detail: (id) => api.get(`/sessions/${id}`),

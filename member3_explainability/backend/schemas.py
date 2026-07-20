@@ -118,6 +118,34 @@ class ExplainResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Conflict Explanation  (POST /explain/conflict)  — Member 3 novel contribution
+# ---------------------------------------------------------------------------
+
+class NLExplanationOut(BaseModel):
+    text:     str
+    source:   Literal["llm", "template"]
+    verified: bool
+    faithfulness:       float
+    hallucination_rate: float
+    clinical_relevance: float
+
+
+class ConflictExplainResponse(BaseModel):
+    is_conflict:              bool
+    physio_emotion:           str
+    video_emotion:            str
+    fused_emotion:            str
+    agrees_with:              str
+    gate:                     Dict
+    modality_shapley:         Dict[str, float]
+    trust:                    Dict
+    counterfactuals:          List[Dict]
+    losing_modality_recovery: Optional[Dict]
+    rationale:                str
+    explanation:              NLExplanationOut
+
+
+# ---------------------------------------------------------------------------
 # Sessions
 # ---------------------------------------------------------------------------
 
