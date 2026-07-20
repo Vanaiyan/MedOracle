@@ -3,7 +3,7 @@ member2_video_fusion/inference.py
 ==================================
 Singleton inference wrapper for the trained VideoEmotionModel.
 
-Loads fold_3_best.pt once on first call, caches the model in memory.
+Loads fold_1_best.pt once on first call, caches the model in memory.
 Provides predict_video() which accepts a raw video file path and returns
 the M2 → M3 prediction_output dict (video-only mode, physio missing).
 
@@ -34,7 +34,7 @@ from member2_video_fusion.preprocessing.dataset import (
 # Constants
 # ---------------------------------------------------------------------------
 
-_MODEL_PATH = Path(__file__).parent / "models" / "fold_3_best.pt"
+_MODEL_PATH = Path(__file__).parent / "models" / "fold_1_best.pt"
 _N_FRAMES   = 16
 _K          = 5   # number of emotion classes
 

@@ -9,14 +9,23 @@ Retrain v2: CREMA-D + RAVDESS unified 5-fold training
 Prerequisite: run kaggle_ravdess_extract.py first and commit its output
 as a Kaggle dataset, then update RAVDESS_MANIFEST_PATH below.
 
-What changed vs the v1 training (0.6403 mean F1)
--------------------------------------------------
-  Fix 1  encoder_drop=0.3        — regularise the largest sub-network
-  Fix 2  early stopping p=5      — stop before overfitting, not after
-  Fix 3  ReduceLROnPlateau p=3   — decay LR when val_F1 stagnates
-  Fix 4  augmentation            — flip + color jitter (with saturation) + rotation ±10°
-  Fix 5  CREMA-D + RAVDESS       — 115 actors across two recording styles
-  Fix 6  mixed precision (AMP)   — same as before, kept from v1
+What changed in v3.1 (the middle path — fixes both over- and under-fitting)
+---------------------------------------------------------------------------
+  v2  fully fine-tuned layer4 @ 1e-4 → memorised actors (train 0.88 / val 0.63).
+  v3  froze the WHOLE backbone        → underfit badly (train≈val≈0.30, random-ish).
+  v3.1 keeps layer4 trainable but SLOW, with strong regularisation:
+
+  Fix 1  Discriminative LR       — layer4 conv @ 1e-5 (adapts to faces slowly,
+                                   can't memorise); BiLSTM head @ 5e-4 (learns fast).
+  Fix 2  Frozen-BatchNorm        — all backbone BN kept in eval() so running stats
+                                   never drift → smooth validation curves.
+  Fix 3  BiLSTM mean-pooling     — average over all 16 timesteps instead of the
+                                   last hidden state (uses both directions fully).
+  Fix 4  Cutout + stronger jitter— random erasing (p=0.5) + ±30% colour jitter
+                                   break actor-identity shortcuts.
+  Fix 5  Cosine LR + warmup      — replaces ReduceLROnPlateau; smoother descent.
+  Fix 6  weight_decay 5e-4, fc_drop 0.4 — regularise without choking learning.
+  Kept   StratifiedGroupKFold, label smoothing 0.1, grad clip 1.0, seeds, AMP.
 
 Kaggle dataset paths (update these to match your actual dataset slugs)
 ----------------------------------------------------------------------
@@ -28,12 +37,12 @@ Kaggle dataset paths (update these to match your actual dataset slugs)
 Training setup
 --------------
   Dataset    : CREMA-D (91 actors) + RAVDESS (24 actors) = 115 actors
-  Folds      : 5-fold actor-independent GroupKFold
+  Folds      : 5-fold actor-independent StratifiedGroupKFold
   Batch size : 16
   Max epochs : 30  (early stopping will likely trigger sooner)
-  LR         : 1e-4  (AdamW with weight decay 1e-4)
-  Scheduler  : ReduceLROnPlateau (patience=3, factor=0.5, mode=max)
-  Early stop : patience=5 on val_macro_f1 (no improvement → stop)
+  LR         : head 5e-4 / layer4 backbone 1e-5  (AdamW, weight decay 5e-4)
+  Scheduler  : LinearLR warmup (3 ep) → CosineAnnealingLR (smooth descent)
+  Early stop : patience=8 on val_macro_f1 (no improvement → stop)
   Metric     : Macro-averaged F1 (primary, handles class imbalance)
   Loss       : Weighted cross-entropy (balanced class weights per fold)
   AMP        : torch.amp.autocast + GradScaler (CUDA only)
@@ -75,20 +84,24 @@ print(f"\nsys.path[0] = /kaggle/working")
 
 import csv
 import json
+import random
+import subprocess
 import time
 from collections import Counter
 from pathlib import Path
 
+from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.metrics import classification_report, f1_score
-from sklearn.model_selection import GroupKFold
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, Subset
-from tqdm.auto import tqdm
 
 from member2_video_fusion.models.video_model import VideoEmotionModel
 from member2_video_fusion.preprocessing.multi_corpus_dataset import (
@@ -106,21 +119,29 @@ if torch.cuda.is_available():
     print(f"  GPU             : {torch.cuda.get_device_name(0)}")
     print(f"  VRAM            : {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
+# ── Reproducibility seeds ──────────────────────────────────────────────────────
+RANDOM_SEED = 42
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(RANDOM_SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark     = False
+print(f"  Random seed fixed: {RANDOM_SEED}")
+
 
 # ============================================================
 # CELL 3 — Configuration
 # ============================================================
 
 # ── Kaggle dataset paths ───────────────────────────────────────────────────────
-CREMAD_NPY_DIR       = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames")
-CREMAD_MANIFEST_PATH = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames/manifest.csv")
+CREMAD_NPY_DIR        = Path("/kaggle/input/datasets/vanaiyan/cremad-npy-frames")
+# No manifest CSV — CREMA-D .npy files encode all info in their filenames:
+# {actor_id}_{sentence}_{emotion}_{level}.npy  e.g. 1001_DFA_ANG_XX.npy
 
-# Update this path after committing kaggle_ravdess_extract.py output as a dataset
+# Update this path after committing kaggle_ravdess_extract.py output
 RAVDESS_MANIFEST_PATH = Path("/kaggle/input/datasets/vanaiyan/ravdess-npy-frames/ravdess_manifest.csv")
-# .npy files are in a ravdess_npy/ subfolder inside the same dataset.
-# The manifest stores paths from the extraction notebook's /kaggle/working/ — we remap
-# them here so they resolve correctly in this (different) notebook's input filesystem.
-RAVDESS_NPY_DIR = RAVDESS_MANIFEST_PATH.parent / "ravdess_npy"
 
 # ── Output ─────────────────────────────────────────────────────────────────────
 CHECKPOINT_DIR = Path("/kaggle/working/checkpoints_v2")
@@ -131,18 +152,26 @@ UNIFIED_MANIFEST_PATH = Path("/kaggle/working/unified_manifest.csv")
 # ── Hyperparameters ────────────────────────────────────────────────────────────
 BATCH_SIZE       = 16
 MAX_EPOCHS       = 30         # early stopping will fire before this in most folds
-LR               = 1e-4
-WEIGHT_DECAY     = 1e-4
+BACKBONE_LR      = 1e-5       # v3.1: layer4 adapts SLOWLY → can't memorise actors
+HEAD_LR          = 5e-4       # v3.1: BiLSTM head learns fast (was 1e-4, too slow)
+WEIGHT_DECAY     = 5e-4       # v3: stronger weight decay (was 1e-4)
 NUM_WORKERS      = 2          # Kaggle T4 can handle 2 workers
-ENCODER_DROPOUT  = 0.3        # Fix 1: was 0.0 in v1
-EARLY_STOP_PAT   = 5          # Fix 2: patience in epochs
-SCHED_PATIENCE   = 3          # Fix 3: ReduceLROnPlateau patience
-SCHED_FACTOR     = 0.5        # halve LR on plateau
-LABEL_SMOOTHING  = 0.1        # Fix 7: prevents overconfident hard-label learning
-GRAD_CLIP_NORM   = 1.0        # Fix 8: caps gradient magnitude, stabilises updates
-N_FOLDS          = 5
+ENCODER_DROPOUT  = 0.0        # dropout on encoder output (BN frozen, kept 0)
+LSTM_DROPOUT     = 0.3        # dropout between BiLSTM layers
+FC_DROPOUT       = 0.4        # v3.1: eased from 0.5 (was underfitting with full freeze)
+EARLY_STOP_PAT   = 8          # more patience (cosine LR needs room to anneal)
+WARMUP_EPOCHS    = 3          # linear LR warmup before cosine annealing
+N_FOLDS              = 5
+TEST_ACTOR_FRACTION  = 0.10   # ~10% of actors held out — never touched until Cell 10
+TEST_RANDOM_SEED     = 42     # fixed seed so test split is reproducible across runs
 
-USE_AMP = torch.cuda.is_available()   # AMP only on CUDA
+USE_AMP         = torch.cuda.is_available()   # AMP only on CUDA
+LABEL_SMOOTHING = 0.1   # applied to training + test CrossEntropyLoss
+GRAD_CLIP       = 1.0   # max gradient norm — prevents LSTM/AMP gradient spikes
+
+# ── Kaggle checkpoint dataset (auto-push after each fold) ─────────────────────
+KAGGLE_USERNAME         = os.environ.get("KAGGLE_USERNAME", "vanaiyan")
+CHECKPOINT_DATASET_SLUG = "medoracle-v2-checkpoints"   # created automatically if absent
 
 EMOTION_LABELS = list(EMOTION_CLASSES.keys())   # ["stress","calm","happy","sad","angry"]
 IDX_TO_EMOTION = {v: k for k, v in EMOTION_CLASSES.items()}
@@ -152,12 +181,13 @@ print(f"  MedOracle — VideoEmotionModel Retrain v2")
 print(f"{'='*60}")
 print(f"  MAX_EPOCHS      : {MAX_EPOCHS} (early-stopping patience={EARLY_STOP_PAT})")
 print(f"  BATCH_SIZE      : {BATCH_SIZE}")
-print(f"  LR              : {LR}  WD={WEIGHT_DECAY}")
-print(f"  ENCODER_DROP    : {ENCODER_DROPOUT}  (was 0.0 in v1)")
-print(f"  SCHEDULER       : ReduceLROnPlateau(patience={SCHED_PATIENCE}, factor={SCHED_FACTOR})")
-print(f"  LABEL_SMOOTHING : {LABEL_SMOOTHING}   (prevents overconfident predictions)")
-print(f"  GRAD_CLIP_NORM  : {GRAD_CLIP_NORM}     (max gradient norm before clipping)")
+print(f"  LR (head/backbone): {HEAD_LR} / {BACKBONE_LR}   WD={WEIGHT_DECAY}")
+print(f"  ENCODER         : layer4 conv trainable @ {BACKBONE_LR} (BN frozen); layer1-3 frozen")
+print(f"  FC_DROPOUT      : {FC_DROPOUT}   LSTM_DROPOUT: {LSTM_DROPOUT}")
+print(f"  SCHEDULER       : cosine annealing + {WARMUP_EPOCHS}-epoch linear warmup")
 print(f"  MIXED PRECISION : {USE_AMP}")
+print(f"  GRAD_CLIP       : {GRAD_CLIP}")
+print(f"  LABEL_SMOOTHING : {LABEL_SMOOTHING}  (train + test)")
 print(f"  CHECKPOINT DIR  : {CHECKPOINT_DIR}")
 
 
@@ -165,110 +195,86 @@ print(f"  CHECKPOINT DIR  : {CHECKPOINT_DIR}")
 # CELL 4 — Build unified manifest (CREMA-D + RAVDESS)
 # ============================================================
 
-def build_unified_manifest(
-    cremad_manifest_path: Path,
-    ravdess_manifest_path: Path,
-    output_path: Path,
-    ravdess_npy_dir: Path | None = None,
-) -> list:
-    """Merge CREMA-D and RAVDESS manifests into a single unified CSV.
+# CREMA-D: no manifest CSV — all info is encoded in filenames
+# Format: {actor_id}_{sentence}_{emotion}_{level}.npy
+# e.g.  1001_DFA_ANG_XX.npy
+CREMAD_LABEL_MAP = {
+    "ANG": "angry",
+    "HAP": "happy",
+    "SAD": "sad",
+    "NEU": "calm",
+    "FEA": "stress",
+    # DIS → no clean 5-class mapping → dropped
+}
 
-    CREMA-D manifest CSV is expected to have columns:
-        path (video path), actor_id, emotion, emotion_int, raw_label, ...
-    The .npy path is derived by replacing the video file suffix with .npy
-    and the directory with CREMAD_NPY_DIR.
+# RAVDESS .npy files live in a ravdess_npy/ subfolder inside the dataset.
+# The manifest stored /kaggle/working/ paths from the extraction notebook —
+# remap to the actual input mount path here.
+RAVDESS_NPY_DIR = RAVDESS_MANIFEST_PATH.parent / "ravdess_npy"
 
-    RAVDESS manifest CSV (from kaggle_ravdess_extract.py) has columns:
-        npy_path, actor_id, source, emotion, emotion_int
-
-    ravdess_npy_dir : if provided, overrides the directory component of each
-        RAVDESS npy_path (keeps the filename). Required when the extraction
-        notebook's /kaggle/working/ paths differ from this notebook's input
-        mount path — which is always the case on Kaggle.
-
-    Unified manifest columns (written to output_path):
-        npy_path, actor_id, source, emotion, emotion_int
-
-    Returns
-    -------
-    List of unified row dicts.
-    """
+def build_unified_manifest(cremad_npy_dir, ravdess_manifest_path,
+                           output_path, ravdess_npy_dir):
     all_rows = []
 
-    # ── 1. CREMA-D rows ────────────────────────────────────────────────────────
+    # ── 1. CREMA-D: scan directory, parse filenames ────────────────────────────
     cremad_skipped = 0
-    with open(cremad_manifest_path, newline="", encoding="utf-8") as f:
+    for npy_file in sorted(cremad_npy_dir.glob("*.npy")):
+        parts = npy_file.stem.split("_")
+        if len(parts) < 3:
+            cremad_skipped += 1; continue
+        try:
+            actor_id    = int(parts[0])   # e.g. 1001
+            emotion_raw = parts[2]        # e.g. ANG, FEA, DIS
+        except (ValueError, IndexError):
+            cremad_skipped += 1; continue
+        if emotion_raw not in CREMAD_LABEL_MAP:
+            cremad_skipped += 1; continue
+        emotion_str = CREMAD_LABEL_MAP[emotion_raw]
+        all_rows.append({
+            "npy_path":    str(npy_file),
+            "actor_id":    actor_id,
+            "source":      "cremad",
+            "emotion":     emotion_str,
+            "emotion_int": int(EMOTION_CLASSES[emotion_str]),
+        })
+    cremad_total = sum(1 for r in all_rows if r["source"] == "cremad")
+    print(f"  CREMA-D : {cremad_total} rows loaded, {cremad_skipped} skipped (DIS dropped)")
+
+    # ── 2. RAVDESS: read manifest, remap paths to input mount ─────────────────
+    ravdess_total = ravdess_skipped = 0
+    with open(ravdess_manifest_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            emotion_str = row.get("emotion", "").strip().lower()
-            # Skip disgust rows (already filtered in original manifest, but guard)
-            if emotion_str not in EMOTION_CLASSES:
-                cremad_skipped += 1
-                continue
-
-            # Derive .npy path from original video path
-            video_path = Path(row["path"])
-            npy_path   = CREMAD_NPY_DIR / (video_path.stem + ".npy")
-
-            if not npy_path.exists():
-                cremad_skipped += 1
-                continue
-
+            npy_path    = ravdess_npy_dir / Path(row["npy_path"]).name
+            emotion_str = row["emotion"].strip().lower()
+            if not npy_path.exists() or emotion_str not in EMOTION_CLASSES:
+                ravdess_skipped += 1; continue
             all_rows.append({
                 "npy_path":    str(npy_path),
                 "actor_id":    int(row["actor_id"]),
-                "source":      "cremad",
-                "emotion":     emotion_str,
-                "emotion_int": int(EMOTION_CLASSES[emotion_str]),
-            })
-
-    cremad_total = len([r for r in all_rows if r["source"] == "cremad"])
-    print(f"  CREMA-D : {cremad_total} rows loaded, {cremad_skipped} skipped")
-
-    # ── 2. RAVDESS rows ────────────────────────────────────────────────────────
-    ravdess_total   = 0
-    ravdess_skipped = 0
-    with open(ravdess_manifest_path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            npy_path   = Path(row["npy_path"])
-            if ravdess_npy_dir is not None:
-                npy_path = ravdess_npy_dir / npy_path.name
-            emotion_str = row["emotion"].strip().lower()
-
-            if not npy_path.exists() or emotion_str not in EMOTION_CLASSES:
-                ravdess_skipped += 1
-                continue
-
-            all_rows.append({
-                "npy_path":    str(npy_path),
-                "actor_id":    int(row["actor_id"]),    # already offset 2001–2024
                 "source":      "ravdess",
                 "emotion":     emotion_str,
                 "emotion_int": int(EMOTION_CLASSES[emotion_str]),
             })
             ravdess_total += 1
-
     print(f"  RAVDESS : {ravdess_total} rows loaded, {ravdess_skipped} skipped")
 
-    # ── 3. Write unified manifest ──────────────────────────────────────────────
     fieldnames = ["npy_path", "actor_id", "source", "emotion", "emotion_int"]
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_rows)
-
     print(f"  Total   : {len(all_rows)} rows → {output_path}")
     return all_rows
 
 
 print("\nBuilding unified manifest...")
 unified_rows = build_unified_manifest(
-    CREMAD_MANIFEST_PATH,
+    CREMAD_NPY_DIR,
     RAVDESS_MANIFEST_PATH,
     UNIFIED_MANIFEST_PATH,
     ravdess_npy_dir=RAVDESS_NPY_DIR,
 )
 
-# ── Summary stats ──────────────────────────────────────────────────────────────
 src_counts   = Counter(r["source"]  for r in unified_rows)
 emo_counts   = Counter(r["emotion"] for r in unified_rows)
 actor_counts = Counter(r["actor_id"] for r in unified_rows)
@@ -284,25 +290,78 @@ for emo in EMOTION_LABELS:
 
 
 # ============================================================
-# CELL 5 — Generate 5-fold GroupKFold splits
+# CELL 5 — Carve held-out test set, then 5-fold GroupKFold
 # ============================================================
 
-print(f"\nGenerating {N_FOLDS}-fold actor-independent GroupKFold splits...")
-folds = get_unified_folds(UNIFIED_MANIFEST_PATH, n_splits=N_FOLDS)
+# ── Step 1: stratified actor-level test split ─────────────────────────────────
+# Separate CREMA-D and RAVDESS actors so both sources are represented in test.
+all_actors     = sorted(set(r["actor_id"] for r in unified_rows))
+cremad_actors  = sorted(a for a in all_actors if a < 2000)    # 91 actors
+ravdess_actors = sorted(a for a in all_actors if a >= 2000)   # 24 actors
+
+rng = random.Random(TEST_RANDOM_SEED)
+n_cremad_test  = max(1, round(len(cremad_actors)  * TEST_ACTOR_FRACTION))  # 9
+n_ravdess_test = max(1, round(len(ravdess_actors) * TEST_ACTOR_FRACTION))  # 2
+
+test_cremad_actors  = set(rng.sample(cremad_actors,  n_cremad_test))
+test_ravdess_actors = set(rng.sample(ravdess_actors, n_ravdess_test))
+test_actors         = test_cremad_actors | test_ravdess_actors
+
+test_rows = [r for r in unified_rows if r["actor_id"]     in test_actors]
+cv_rows   = [r for r in unified_rows if r["actor_id"] not in test_actors]
+
+test_src = Counter(r["source"]  for r in test_rows)
+test_emo = Counter(r["emotion"] for r in test_rows)
+cv_src   = Counter(r["source"]  for r in cv_rows)
+
+print(f"Held-out test set (frozen until Cell 10):")
+print(f"  Actors  : {len(test_actors)}  "
+      f"({n_cremad_test} CREMA-D + {n_ravdess_test} RAVDESS)")
+print(f"  Clips   : {len(test_rows)}  {dict(test_src)}")
+print(f"  Emotions: ", end="")
+print({e: test_emo.get(e, 0) for e in ["stress","calm","happy","sad","angry"]})
+
+# Save test manifest — needed to reproduce evaluation in later sessions
+TEST_MANIFEST_PATH = CHECKPOINT_DIR / "test_manifest.csv"
+_fieldnames = ["npy_path", "actor_id", "source", "emotion", "emotion_int"]
+with open(TEST_MANIFEST_PATH, "w", newline="", encoding="utf-8") as _f:
+    _w = csv.DictWriter(_f, fieldnames=_fieldnames)
+    _w.writeheader(); _w.writerows(test_rows)
+print(f"  Saved → {TEST_MANIFEST_PATH}")
+
+print(f"\nCV pool : {len(cv_rows)} clips / "
+      f"{len(set(r['actor_id'] for r in cv_rows))} actors — {dict(cv_src)}")
+
+# ── Step 2: 5-fold StratifiedGroupKFold on CV pool only ───────────────────────
+# StratifiedGroupKFold guarantees both actor independence AND class balance per fold.
+print(f"\nGenerating {N_FOLDS}-fold StratifiedGroupKFold on CV pool...")
+
+_groups = np.array([r["actor_id"]    for r in cv_rows])
+_y      = np.array([r["emotion_int"] for r in cv_rows])
+_X      = np.arange(len(cv_rows))
+_gkf    = StratifiedGroupKFold(n_splits=N_FOLDS, shuffle=True, random_state=TEST_RANDOM_SEED)
+folds   = []
+
+for _tr_idx, _val_idx in _gkf.split(_X, y=_y, groups=_groups):
+    folds.append(([cv_rows[i] for i in _tr_idx],
+                  [cv_rows[i] for i in _val_idx]))
 
 for i, (train_rows, val_rows) in enumerate(folds):
     train_actors = set(r["actor_id"] for r in train_rows)
     val_actors   = set(r["actor_id"] for r in val_rows)
     overlap      = train_actors & val_actors
+    # test actors must also be absent from every fold
+    test_leak    = test_actors & train_actors | test_actors & val_actors
     train_src    = Counter(r["source"] for r in train_rows)
     val_src      = Counter(r["source"] for r in val_rows)
-    assert len(overlap) == 0, f"Actor overlap in fold {i+1}!"
+    assert len(overlap)   == 0, f"Train/val actor overlap in fold {i+1}!"
+    assert len(test_leak) == 0, f"Test actor leaked into fold {i+1}!"
     print(f"  Fold {i+1}: train={len(train_rows):>5} clips / {len(train_actors):>3} actors "
           f"{dict(train_src)} | "
           f"val={len(val_rows):>4} clips / {len(val_actors):>3} actors "
           f"{dict(val_src)}")
 
-print(f"\n✓ All {N_FOLDS} folds: no actor overlap")
+print(f"\n✓ All {N_FOLDS} folds: no actor overlap, no test leakage")
 
 
 # ============================================================
@@ -328,31 +387,17 @@ def train_one_epoch(
     optimizer: optim.Optimizer,
     device:    torch.device,
     scaler,
-    desc:      str = "train",
+    desc:      str = "Train",
 ) -> tuple[float, float]:
-    """Run one training epoch with mixed-precision support.
-
-    Parameters
-    ----------
-    scaler : torch.amp.GradScaler instance (or None if not using AMP)
-    desc   : tqdm bar label (include fold/epoch info for readability)
-
-    Returns
-    -------
-    (avg_loss, macro_f1) for the epoch.
-    """
     model.train()
     total_loss  = 0.0
-    n_processed = 0
     all_preds   = []
     all_labels  = []
 
-    pbar = tqdm(loader, desc=f"  {desc}", leave=False, unit="batch",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
-
+    pbar = tqdm(loader, desc=desc, leave=False, unit="batch", dynamic_ncols=True)
     for batch in pbar:
-        clips  = batch["clip"].to(device)    # (B, T, 3, 224, 224)
-        labels = batch["label"].to(device)   # (B,)
+        clips  = batch["clip"].to(device)
+        labels = batch["label"].to(device)
 
         optimizer.zero_grad()
 
@@ -361,24 +406,21 @@ def train_one_epoch(
                 out  = model(clips)
                 loss = criterion(out["logits"], labels)
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
+            scaler.unscale_(optimizer)   # unscale before clipping (required for AMP)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             scaler.step(optimizer)
             scaler.update()
         else:
             out  = model(clips)
             loss = criterion(out["logits"], labels)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             optimizer.step()
 
-        batch_size   = clips.size(0)
-        total_loss  += loss.item() * batch_size
-        n_processed += batch_size
+        total_loss += loss.item() * clips.size(0)
         all_preds.extend(out["predicted_class"].cpu().numpy().tolist())
         all_labels.extend(labels.cpu().numpy().tolist())
-
-        pbar.set_postfix({"avg_loss": f"{total_loss / n_processed:.4f}"})
+        pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
     avg_loss = total_loss / len(loader.dataset)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
@@ -387,27 +429,20 @@ def train_one_epoch(
 
 @torch.no_grad()
 def evaluate(
-    model:     nn.Module,
-    loader:    DataLoader,
-    criterion: nn.Module,
-    device:    torch.device,
-    desc:      str = "val",
-) -> tuple[float, float, list, list]:
-    """Run validation (no gradients, no AMP).
-
-    Returns
-    -------
-    (avg_loss, macro_f1, all_preds, all_labels)
-    """
+    model:        nn.Module,
+    loader:       DataLoader,
+    criterion:    nn.Module,
+    device:       torch.device,
+    desc:         str  = "Val",
+    return_probs: bool = False,
+) -> tuple:
     model.eval()
-    total_loss  = 0.0
-    n_processed = 0
-    all_preds   = []
-    all_labels  = []
+    total_loss = 0.0
+    all_preds  = []
+    all_labels = []
+    all_probs  = []
 
-    pbar = tqdm(loader, desc=f"  {desc}", leave=False, unit="batch",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
-
+    pbar = tqdm(loader, desc=desc, leave=False, unit="batch", dynamic_ncols=True)
     for batch in pbar:
         clips  = batch["clip"].to(device)
         labels = batch["label"].to(device)
@@ -415,16 +450,18 @@ def evaluate(
         out  = model(clips)
         loss = criterion(out["logits"], labels)
 
-        batch_size   = clips.size(0)
-        total_loss  += loss.item() * batch_size
-        n_processed += batch_size
+        total_loss += loss.item() * clips.size(0)
         all_preds.extend(out["predicted_class"].cpu().numpy().tolist())
         all_labels.extend(labels.cpu().numpy().tolist())
-
-        pbar.set_postfix({"avg_loss": f"{total_loss / n_processed:.4f}"})
+        if return_probs:
+            probs = torch.softmax(out["logits"], dim=1)
+            all_probs.extend(probs.cpu().numpy().tolist())
+        pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
     avg_loss = total_loss / len(loader.dataset)
     macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    if return_probs:
+        return avg_loss, macro_f1, all_preds, all_labels, all_probs
     return avg_loss, macro_f1, all_preds, all_labels
 
 
@@ -464,6 +501,55 @@ class EarlyStopping:
             return self.counter >= self.patience   # stop if patience exhausted
 
 
+def init_checkpoint_dataset():
+    """Write dataset-metadata.json and create the Kaggle dataset if it doesn't exist."""
+    meta_path = CHECKPOINT_DIR / "dataset-metadata.json"
+    if not meta_path.exists():
+        meta = {
+            "title": "MedOracle V2 Checkpoints",
+            "id": f"{KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}",
+            "licenses": [{"name": "CC0-1.0"}],
+        }
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+    result = subprocess.run(
+        ["kaggle", "datasets", "create", "-p", str(CHECKPOINT_DIR), "--dir-mode", "tar"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"  ✓ Checkpoint dataset created: {KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}")
+    else:
+        msg = result.stderr.strip()
+        if "already" in msg.lower() or "exists" in msg.lower() or "403" in msg:
+            print(f"  ✓ Dataset already exists — will add a version after each fold")
+        else:
+            print(f"  ⚠ Dataset create note: {msg}")
+
+
+def push_checkpoint_to_kaggle(fold_num: int, val_f1: float):
+    """Push the full checkpoints directory as a new dataset version."""
+    msg = f"fold {fold_num}/{N_FOLDS} complete — val_macro_f1={val_f1:.4f}"
+    print(f"\n  Pushing fold {fold_num} checkpoint to Kaggle …", flush=True)
+    result = subprocess.run(
+        [
+            "kaggle", "datasets", "version",
+            "-p", str(CHECKPOINT_DIR),
+            "-m", msg,
+            "--dir-mode", "tar",
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"  ✓ Dataset updated → {KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}")
+    else:
+        print(f"  ⚠ Kaggle push failed (checkpoint is still at {CHECKPOINT_DIR}):")
+        print(f"    {result.stderr.strip()}")
+
+
+# Create the dataset now so the first fold's push uses "version" not "create"
+init_checkpoint_dataset()
+
 print("✓ Training helpers defined")
 
 
@@ -474,10 +560,52 @@ print("✓ Training helpers defined")
 device = VideoEmotionModel.get_device()
 print(f"\nDevice: {device}")
 
+# ── Resume support ──────────────────────────────────────────────────────────────
+# Each completed fold saves fold_{n}_best.pt + fold_{n}_result.json and pushes the
+# whole dir to Kaggle. A 5-fold run (~13 h) does not fit one 12 h Kaggle session,
+# so we resume across sessions: pull the latest checkpoint dataset into the working
+# dir, then skip any fold that already has both its checkpoint and result JSON.
+RESUME = True   # set False to force every fold to retrain from scratch
+if RESUME:
+    print("\nResume: pulling any existing checkpoints from Kaggle …")
+    _dl = subprocess.run(
+        ["kaggle", "datasets", "download",
+         "-d", f"{KAGGLE_USERNAME}/{CHECKPOINT_DATASET_SLUG}",
+         "-p", str(CHECKPOINT_DIR), "--unzip"],
+        capture_output=True, text=True,
+    )
+    # The dataset was created with --dir-mode tar, so --unzip may leave a *.tar
+    # (or *.tar.gz) archive behind — unpack it so the .pt / .json files appear.
+    import tarfile
+    for _arch in list(CHECKPOINT_DIR.glob("*.tar")) + list(CHECKPOINT_DIR.glob("*.tar.gz")):
+        try:
+            with tarfile.open(_arch) as _t:
+                _t.extractall(CHECKPOINT_DIR)
+            _arch.unlink()
+        except Exception as _e:
+            print(f"  ⚠ Could not unpack {_arch.name}: {_e}")
+    if _dl.returncode == 0:
+        _done = sorted(CHECKPOINT_DIR.glob("fold_*_result.json"))
+        print(f"  ✓ Restored — found {len(_done)} completed-fold result file(s): "
+              f"{[p.name for p in _done]}")
+    else:
+        print(f"  ⚠ Nothing restored (first run, or download failed) — starting fresh")
+
 fold_results = []
 
 for fold_idx, (train_rows, val_rows) in enumerate(folds):
     fold_num = fold_idx + 1
+
+    # ── Skip folds already completed in a previous session ──────────────────────
+    result_json = CHECKPOINT_DIR / f"fold_{fold_num}_result.json"
+    ckpt_file   = CHECKPOINT_DIR / f"fold_{fold_num}_best.pt"
+    if RESUME and result_json.exists() and ckpt_file.exists():
+        with open(result_json) as _f:
+            prior = json.load(_f)
+        fold_results.append(prior)
+        print(f"\n  ⏩ Fold {fold_num}/{N_FOLDS} already complete "
+              f"(val_macro_f1={prior['val_macro_f1']:.4f}) — skipping")
+        continue
 
     print(f"\n{'='*60}")
     print(f"  FOLD {fold_num}/{N_FOLDS}   "
@@ -514,12 +642,12 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     )
 
     # ── Model ───────────────────────────────────────────────────────────────────
-    # Fix 1: encoder_drop=0.3 (was 0.0 in v1)
+    # v3: ResNet backbone fully frozen inside VideoEmotionModel; only BiLSTM trains
     model = VideoEmotionModel(
         pretrained=True,
         encoder_drop=ENCODER_DROPOUT,
-        lstm_drop=0.3,
-        fc_drop=0.4,
+        lstm_drop=LSTM_DROPOUT,
+        fc_drop=FC_DROPOUT,
     ).to(device)
 
     params = model.param_summary()
@@ -527,27 +655,36 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
           f"{params['trainable']:,} trainable ({params['trainable_pct']}%)")
 
     # ── Loss, optimiser, scheduler ──────────────────────────────────────────────
-    # Fix 7: label_smoothing=0.1 — soft targets prevent the model from
-    # learning overconfident outputs (e.g. 0.99 for one class), which is
-    # one of the primary causes of the v1 overfitting pattern.
-    criterion = nn.CrossEntropyLoss(
-        weight=class_weights,
-        label_smoothing=LABEL_SMOOTHING,
-    )
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=LABEL_SMOOTHING)
 
-    optimizer = optim.AdamW(   # AdamW = Adam + decoupled weight decay (slight improvement)
-        model.parameters(),
-        lr=LR,
+    # v3.1: discriminative LRs — layer4 backbone adapts slowly, head learns fast
+    backbone_params = [p for n, p in model.named_parameters()
+                       if p.requires_grad and n.startswith("encoder.")]
+    head_params     = [p for n, p in model.named_parameters()
+                       if p.requires_grad and not n.startswith("encoder.")]
+    n_bb = sum(p.numel() for p in backbone_params)
+    n_hd = sum(p.numel() for p in head_params)
+    print(f"  Trainable split: layer4 backbone {n_bb:,} @ lr={BACKBONE_LR}  |  "
+          f"head {n_hd:,} @ lr={HEAD_LR}")
+
+    optimizer = optim.AdamW(
+        [
+            {"params": backbone_params, "lr": BACKBONE_LR},
+            {"params": head_params,     "lr": HEAD_LR},
+        ],
+        lr=HEAD_LR,          # default (each group overrides with its own lr)
         weight_decay=WEIGHT_DECAY,
     )
 
-    # Fix 3: ReduceLROnPlateau on val_macro_f1
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="max",
-        patience=SCHED_PATIENCE,
-        factor=SCHED_FACTOR,
-        min_lr=1e-6,
+    # v3: linear warmup → cosine annealing (smoother than step-drops on plateau)
+    warmup_sched = optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, total_iters=WARMUP_EPOCHS,
+    )
+    cosine_sched = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, MAX_EPOCHS - WARMUP_EPOCHS), eta_min=1e-6,
+    )
+    scheduler = optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[WARMUP_EPOCHS],
     )
 
     # Fix 6: AMP GradScaler (CUDA only)
@@ -556,37 +693,40 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
     # Fix 2: Early stopping
     early_stop = EarlyStopping(patience=EARLY_STOP_PAT)
 
-    ckpt_path      = CHECKPOINT_DIR / f"fold_{fold_num}_best.pt"
-    best_epoch     = 0
-    best_train_f1  = 0.0   # train F1 at the best-val epoch (for overfitting gap)
-    history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
+    ckpt_path  = CHECKPOINT_DIR / f"fold_{fold_num}_best.pt"
+    best_epoch = 0
+
+    # Per-epoch history for learning curve plots
+    hist_train_loss, hist_val_loss = [], []
+    hist_train_f1,   hist_val_f1   = [], []
 
     print(f"\n  {'Ep':>3}  {'Train Loss':>10}  {'Train F1':>8}  "
           f"{'Val Loss':>8}  {'Val F1':>6}  {'LR':>8}  {'ES':>5}  {'Δ'}")
     print(f"  {'─'*72}")
 
     # ── Epoch loop ──────────────────────────────────────────────────────────────
-    for epoch in range(1, MAX_EPOCHS + 1):
+    epoch_bar = tqdm(
+        range(1, MAX_EPOCHS + 1),
+        desc=f"Fold {fold_num}/{N_FOLDS}",
+        unit="ep",
+        leave=True,
+        dynamic_ncols=True,
+    )
+    for epoch in epoch_bar:
         t0 = time.time()
 
         train_loss, train_f1 = train_one_epoch(
             model, train_loader, criterion, optimizer, device, scaler,
-            desc=f"F{fold_num} E{epoch:02d} train",
+            desc=f"  Ep {epoch:02d} Train",
         )
         val_loss, val_f1, val_preds, val_labels = evaluate(
             model, val_loader, criterion, device,
-            desc=f"F{fold_num} E{epoch:02d} val  ",
+            desc=f"  Ep {epoch:02d} Val  ",
         )
 
-        # Record history for plots
-        history["train_loss"].append(train_loss)
-        history["val_loss"].append(val_loss)
-        history["train_f1"].append(train_f1)
-        history["val_f1"].append(val_f1)
-
-        # Scheduler step (Fix 3)
-        scheduler.step(val_f1)
-        current_lr = optimizer.param_groups[0]["lr"]
+        # Scheduler step (cosine + warmup — stepped once per epoch, no metric arg)
+        scheduler.step()
+        current_lr = optimizer.param_groups[-1]["lr"]   # head LR (group 0 is backbone)
 
         # Early stopping check (Fix 2)
         stop = early_stop.step(val_f1, epoch)
@@ -596,8 +736,7 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
         marker   = "✓" if improved else " "
 
         if improved:
-            best_epoch    = epoch
-            best_train_f1 = train_f1
+            best_epoch = epoch
             torch.save({
                 "fold":                fold_num,
                 "epoch":               epoch,
@@ -608,88 +747,167 @@ for fold_idx, (train_rows, val_rows) in enumerate(folds):
                 "config": {
                     "encoder_drop": ENCODER_DROPOUT,
                     "batch_size":   BATCH_SIZE,
-                    "lr":           LR,
+                    "head_lr":      HEAD_LR,
+                    "backbone_lr":  BACKBONE_LR,
                     "weight_decay": WEIGHT_DECAY,
                 },
             }, ckpt_path)
 
         elapsed = time.time() - t0
+        hist_train_loss.append(train_loss)
+        hist_val_loss.append(val_loss)
+        hist_train_f1.append(train_f1)
+        hist_val_f1.append(val_f1)
+
         print(f"  {epoch:>3}  {train_loss:>10.4f}  {train_f1:>8.4f}  "
               f"{val_loss:>8.4f}  {val_f1:>6.4f}  {current_lr:>8.2e}  "
               f"{early_stop.counter:>2}/{EARLY_STOP_PAT}  "
               f"{marker}  ({elapsed:.0f}s)")
 
+        epoch_bar.set_postfix({
+            "tr_f1": f"{train_f1:.3f}",
+            "vl_f1": f"{val_f1:.3f}",
+            "best":  f"{early_stop.best_f1:.3f}",
+            "ES":    f"{early_stop.counter}/{EARLY_STOP_PAT}",
+            "lr":    f"{current_lr:.1e}",
+        })
+
         if stop:
             print(f"\n  → Early stopping at epoch {epoch} "
                   f"(best was epoch {early_stop.best_epoch}, "
                   f"F1={early_stop.best_f1:.4f})")
+            epoch_bar.close()
             break
 
     # ── Per-fold classification report ──────────────────────────────────────────
     print(f"\n  Best Fold {fold_num} — Epoch {best_epoch}, "
           f"Val Macro-F1: {early_stop.best_f1:.4f}")
 
-    # Reload best checkpoint for final report
+    # Reload best checkpoint for final report + confusion matrix
     ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
-    _, _, val_preds_best, val_labels_best = evaluate(
-        model, val_loader, criterion, device
+    _, _, val_preds_best, val_labels_best, val_probs_best = evaluate(
+        model, val_loader, criterion, device, return_probs=True
     )
 
-    report = classification_report(
+    report_dict = classification_report(
         val_labels_best, val_preds_best,
         target_names=EMOTION_LABELS,
         digits=4,
         zero_division=0,
+        output_dict=True,
     )
     print(f"\n  Classification Report — Fold {fold_num} (best epoch {best_epoch}):\n")
-    print(report)
+    print(classification_report(
+        val_labels_best, val_preds_best,
+        target_names=EMOTION_LABELS, digits=4, zero_division=0,
+    ))
+    per_class_f1 = {lbl: round(report_dict[lbl]["f1-score"], 4) for lbl in EMOTION_LABELS}
 
-    fold_results.append({
-        "fold":             fold_num,
-        "best_epoch":       best_epoch,
-        "val_macro_f1":     early_stop.best_f1,
-        "train_f1_at_best": best_train_f1,
-        "checkpoint":       str(ckpt_path),
-        "train_clips":      len(train_ds),
-        "val_clips":        len(val_ds),
-        "history":          history,
-    })
+    # ── Confusion matrix ────────────────────────────────────────────────────────
+    cm = confusion_matrix(val_labels_best, val_preds_best)
+    fig_cm, ax_cm = plt.subplots(figsize=(7, 6))
+    im = ax_cm.imshow(cm, interpolation="nearest", cmap="Blues")
+    plt.colorbar(im, ax=ax_cm)
+    ax_cm.set_xticks(range(len(EMOTION_LABELS)))
+    ax_cm.set_yticks(range(len(EMOTION_LABELS)))
+    ax_cm.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+    ax_cm.set_yticklabels(EMOTION_LABELS)
+    thresh = cm.max() / 2
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax_cm.text(j, i, str(cm[i, j]), ha="center", va="center",
+                       color="white" if cm[i, j] > thresh else "black", fontsize=11)
+    ax_cm.set_xlabel("Predicted"); ax_cm.set_ylabel("True")
+    ax_cm.set_title(f"Fold {fold_num} Confusion Matrix (best epoch {best_epoch})",
+                    fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(CHECKPOINT_DIR / f"fold_{fold_num}_confusion_matrix.png", dpi=120)
+    plt.show()
 
-    # ── Per-fold learning curve plot ───────────────────────────────────────────
-    epochs_ran = list(range(1, len(history["train_loss"]) + 1))
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    # ── Normalised confusion matrix (recall per class) ─────────────────────────
+    cm_norm = cm.astype(np.float32) / cm.sum(axis=1, keepdims=True)
+    fig_cmn, ax_cmn = plt.subplots(figsize=(7, 6))
+    im_n = ax_cmn.imshow(cm_norm, interpolation="nearest", cmap="Blues", vmin=0, vmax=1)
+    plt.colorbar(im_n, ax=ax_cmn)
+    ax_cmn.set_xticks(range(len(EMOTION_LABELS)))
+    ax_cmn.set_yticks(range(len(EMOTION_LABELS)))
+    ax_cmn.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+    ax_cmn.set_yticklabels(EMOTION_LABELS)
+    for i in range(cm_norm.shape[0]):
+        for j in range(cm_norm.shape[1]):
+            ax_cmn.text(j, i, f"{cm_norm[i, j]:.2f}", ha="center", va="center",
+                        color="white" if cm_norm[i, j] > 0.5 else "black", fontsize=10)
+    ax_cmn.set_xlabel("Predicted"); ax_cmn.set_ylabel("True")
+    ax_cmn.set_title(f"Fold {fold_num} Normalised Confusion Matrix — Recall per Class",
+                     fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(CHECKPOINT_DIR / f"fold_{fold_num}_confusion_matrix_norm.png", dpi=120)
+    plt.show()
 
-    ax1.plot(epochs_ran, history["train_loss"], "b-o", ms=3, label="Train Loss")
-    ax1.plot(epochs_ran, history["val_loss"],   "r-o", ms=3, label="Val Loss")
+    # ── Save softmax probabilities CSV ──────────────────────────────────────────
+    probs_path = CHECKPOINT_DIR / f"fold_{fold_num}_val_probs.csv"
+    with open(probs_path, "w", newline="", encoding="utf-8") as _f:
+        _w = csv.writer(_f)
+        _w.writerow(["true_label", "pred_label"] + [f"prob_{e}" for e in EMOTION_LABELS])
+        for true, pred, prob in zip(val_labels_best, val_preds_best, val_probs_best):
+            _w.writerow([IDX_TO_EMOTION[true], IDX_TO_EMOTION[pred]] + [f"{p:.6f}" for p in prob])
+    print(f"  Probs saved → {probs_path}")
+
+    # ── Per-fold learning curve ──────────────────────────────────────────────────
+    eps = list(range(1, len(hist_train_loss) + 1))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4))
+
+    ax1.plot(eps, hist_train_loss, label="Train Loss", color="steelblue",  linewidth=2)
+    ax1.plot(eps, hist_val_loss,   label="Val Loss",   color="darkorange", linewidth=2)
     ax1.axvline(best_epoch, color="green", linestyle="--", alpha=0.8,
                 label=f"Best epoch {best_epoch}")
-    ax1.set_xlabel("Epoch"); ax1.set_ylabel("Loss")
-    ax1.set_title(f"Fold {fold_num} — Loss Curves")
-    ax1.legend(); ax1.grid(True, alpha=0.3)
+    ax1.set_title(f"Fold {fold_num} — Loss")
+    ax1.set_xlabel("Epoch"); ax1.set_ylabel("Cross-Entropy Loss")
+    ax1.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax1.legend(); ax1.grid(alpha=0.3)
 
-    ax2.plot(epochs_ran, history["train_f1"], "b-o", ms=3, label="Train Macro-F1")
-    ax2.plot(epochs_ran, history["val_f1"],   "r-o", ms=3, label="Val Macro-F1")
+    ax2.plot(eps, hist_train_f1, label="Train Macro-F1", color="steelblue",  linewidth=2)
+    ax2.plot(eps, hist_val_f1,   label="Val Macro-F1",   color="darkorange", linewidth=2)
     ax2.axvline(best_epoch, color="green", linestyle="--", alpha=0.8,
                 label=f"Best epoch {best_epoch}")
-    ax2.axhline(early_stop.best_f1, color="red", linestyle=":", alpha=0.5,
-                label=f"Best F1={early_stop.best_f1:.4f}")
-    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Macro-F1")
-    ax2.set_title(f"Fold {fold_num} — F1 Curves")
-    ax2.legend(); ax2.grid(True, alpha=0.3)
+    ax2.axhline(early_stop.best_f1, color="red", linestyle=":", alpha=0.7,
+                label=f"Best val F1 = {early_stop.best_f1:.4f}")
+    ax2.set_title(f"Fold {fold_num} — Macro F1")
+    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Macro-Averaged F1")
+    ax2.set_ylim(0, 1)
+    ax2.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    ax2.legend(); ax2.grid(alpha=0.3)
 
-    overfit_gap = best_train_f1 - early_stop.best_f1
     plt.suptitle(
-        f"Fold {fold_num}/{N_FOLDS}  |  Best Val F1={early_stop.best_f1:.4f} @ ep {best_epoch}"
-        f"  |  Overfit gap={overfit_gap:+.4f}",
-        fontsize=11, fontweight="bold",
+        f"Fold {fold_num}/{N_FOLDS} Learning Curves  |  "
+        f"Best val F1 = {early_stop.best_f1:.4f} @ epoch {best_epoch}",
+        fontsize=12, fontweight="bold",
     )
     plt.tight_layout()
-    plot_path = CHECKPOINT_DIR / f"fold_{fold_num}_curves.png"
-    plt.savefig(plot_path, dpi=100, bbox_inches="tight")
+    plt.savefig(CHECKPOINT_DIR / f"fold_{fold_num}_learning_curve.png", dpi=120)
     plt.show()
-    plt.close()
-    print(f"\n  Plot saved → {plot_path}")
+
+    best_train_f1_at_best_epoch = hist_train_f1[best_epoch - 1] if hist_train_f1 else 0.0
+
+    fold_results.append({
+        "fold":              fold_num,
+        "best_epoch":        best_epoch,
+        "val_macro_f1":      early_stop.best_f1,
+        "train_macro_f1":    best_train_f1_at_best_epoch,
+        "overfit_gap":       round(best_train_f1_at_best_epoch - early_stop.best_f1, 4),
+        "per_class_f1":      per_class_f1,
+        "checkpoint":        str(ckpt_path),
+        "train_clips":       len(train_ds),
+        "val_clips":         len(val_ds),
+    })
+
+    # ── Persist this fold's result so a later session can skip it (resume) ──────
+    with open(CHECKPOINT_DIR / f"fold_{fold_num}_result.json", "w") as _f:
+        json.dump(fold_results[-1], _f, indent=2)
+
+    # ── Auto-push checkpoint to Kaggle so it survives session timeout ───────────
+    push_checkpoint_to_kaggle(fold_num, early_stop.best_f1)
 
 
 # ============================================================
@@ -723,87 +941,96 @@ summary = {
     "std_macro_f1":  std_f1,
     "v1_baseline":   0.6403,
     "delta_vs_v1":   round(delta, 4),
+    "per_class_f1_mean": {
+        lbl: round(float(np.mean([r["per_class_f1"][lbl] for r in fold_results])), 4)
+        for lbl in EMOTION_LABELS
+    },
     "folds":         fold_results,
     "config": {
         "datasets":       ["cremad", "ravdess"],
         "n_actors":       115,
         "batch_size":     BATCH_SIZE,
         "max_epochs":     MAX_EPOCHS,
-        "lr":             LR,
+        "head_lr":        HEAD_LR,
+        "backbone_lr":    BACKBONE_LR,
         "weight_decay":   WEIGHT_DECAY,
-        "encoder_drop":   ENCODER_DROPOUT,
+        "encoder":        "layer4_conv_trainable_lowLR_BNfrozen",
+        "fc_dropout":     FC_DROPOUT,
+        "lstm_dropout":   LSTM_DROPOUT,
         "early_stop_pat": EARLY_STOP_PAT,
-        "sched_patience": SCHED_PATIENCE,
-        "sched_factor":   SCHED_FACTOR,
-        "augmentation":   "flip+colorjitter+rotation10deg",
-        "label_smoothing": LABEL_SMOOTHING,
-        "grad_clip_norm": GRAD_CLIP_NORM,
+        "scheduler":      f"cosine+warmup{WARMUP_EPOCHS}",
+        "bilstm_pooling": "mean_over_timesteps",
+        "augmentation":   "flip+colorjitter0.3+rotation10+cutout",
         "use_amp":        USE_AMP,
         "device":         str(device),
     },
 }
 
 summary_path = CHECKPOINT_DIR / "training_summary_v2.json"
-
-# Remove history from JSON (too large — already saved per-fold plots)
-summary_json = {k: v for k, v in summary.items() if k != "folds"}
-summary_json["folds"] = [
-    {k: v for k, v in r.items() if k != "history"}
-    for r in fold_results
-]
 with open(summary_path, "w") as f:
-    json.dump(summary_json, f, indent=2)
+    json.dump(summary, f, indent=2)
 print(f"\n  Summary saved → {summary_path}")
 
-# ── Summary plots ──────────────────────────────────────────────────────────────
-folds_x   = [f"Fold {r['fold']}" for r in fold_results]
-f1_vals   = [r["val_macro_f1"]     for r in fold_results]
-gaps      = [r["train_f1_at_best"] - r["val_macro_f1"] for r in fold_results]
-best_idx  = int(np.argmax(f1_vals))
+# ── Summary charts ───────────────────────────────────────────────────────────
+folds_x      = [r["fold"]         for r in fold_results]
+val_f1s      = [r["val_macro_f1"] for r in fold_results]
+train_f1s    = [r["train_macro_f1"] for r in fold_results]
+overfit_gaps = [r["overfit_gap"]   for r in fold_results]
+best_epochs  = [r["best_epoch"]    for r in fold_results]
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
-# Left: per-fold Val Macro-F1 bar chart
-bar_colors = ["forestgreen" if i == best_idx else "steelblue"
-              for i in range(len(f1_vals))]
-bars = axes[0].bar(folds_x, f1_vals, color=bar_colors, edgecolor="black", linewidth=0.6)
-axes[0].axhline(mean_f1, color="red",    linestyle="--", linewidth=1.5,
-                label=f"Mean={mean_f1:.4f}")
-axes[0].axhline(0.6403,  color="orange", linestyle=":",  linewidth=1.5,
-                label="v1 baseline=0.6403")
-axes[0].set_ylim(0, 1); axes[0].set_ylabel("Val Macro-F1")
-axes[0].set_title("Per-Fold Val Macro-F1  (green = best)")
-axes[0].legend(); axes[0].grid(True, axis="y", alpha=0.3)
-for bar, val in zip(bars, f1_vals):
-    axes[0].text(bar.get_x() + bar.get_width() / 2,
-                 bar.get_height() + 0.01,
-                 f"{val:.4f}", ha="center", va="bottom", fontsize=9)
+# Chart 1: Val F1 per fold (bar chart)
+bars = axes[0].bar(folds_x, val_f1s, color="steelblue", alpha=0.85, edgecolor="navy", zorder=3)
+axes[0].axhline(mean_f1,  color="crimson",    linestyle="--", linewidth=2,
+                label=f"Mean = {mean_f1:.4f} ± {std_f1:.4f}")
+axes[0].axhline(0.6403,   color="gray",       linestyle=":",  linewidth=1.5,
+                label="v1 baseline = 0.6403")
+for bar, v in zip(bars, val_f1s):
+    axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.008,
+                 f"{v:.4f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+axes[0].set_ylim(0, 1.05)
+axes[0].set_xlabel("Fold"); axes[0].set_ylabel("Val Macro F1")
+axes[0].set_title("Val Macro F1 per Fold", fontweight="bold")
+axes[0].set_xticks(folds_x)
+axes[0].legend(fontsize=8); axes[0].grid(axis="y", alpha=0.4, zorder=0)
 
-# Right: overfitting gap (train F1 − val F1 at best epoch)
-gap_colors = ["firebrick" if g > 0.15 else "steelblue" for g in gaps]
-axes[1].bar(folds_x, gaps, color=gap_colors, edgecolor="black", linewidth=0.6)
-axes[1].axhline(0,    color="black",  linewidth=0.8)
-axes[1].axhline(0.15, color="orange", linestyle="--", alpha=0.8,
-                label="Overfit threshold (0.15)")
-axes[1].set_ylabel("Train F1 − Val F1"); axes[1].set_ylim(bottom=0)
-axes[1].set_title("Overfitting Gap at Best Epoch  (lower = better)")
-axes[1].legend(); axes[1].grid(True, axis="y", alpha=0.3)
-for i, (bar, g) in enumerate(zip(axes[1].patches, gaps)):
-    axes[1].text(bar.get_x() + bar.get_width() / 2,
-                 bar.get_height() + 0.005,
-                 f"{g:.3f}", ha="center", va="bottom", fontsize=9)
+# Chart 2: Train vs Val F1 (overfitting view)
+x = np.arange(len(folds_x))
+w = 0.35
+axes[1].bar(x - w/2, train_f1s, w, label="Train F1", color="steelblue",  alpha=0.85, edgecolor="navy")
+axes[1].bar(x + w/2, val_f1s,   w, label="Val F1",   color="darkorange", alpha=0.85, edgecolor="saddlebrown")
+axes[1].set_ylim(0, 1.05)
+axes[1].set_xlabel("Fold"); axes[1].set_ylabel("Macro F1")
+axes[1].set_title("Train vs Val F1 (Overfitting View)", fontweight="bold")
+axes[1].set_xticks(x); axes[1].set_xticklabels([f"F{f}" for f in folds_x])
+axes[1].legend(); axes[1].grid(axis="y", alpha=0.4)
+for i, gap in enumerate(overfit_gaps):
+    axes[1].text(i, max(train_f1s[i], val_f1s[i]) + 0.015,
+                 f"gap\n{gap:+.3f}", ha="center", fontsize=8, color="dimgray")
+
+# Chart 3: Best epoch per fold
+axes[2].bar(folds_x, best_epochs, color="mediumseagreen", alpha=0.85, edgecolor="darkgreen", zorder=3)
+axes[2].axhline(MAX_EPOCHS, color="red", linestyle="--", linewidth=1.5,
+                label=f"Max epochs = {MAX_EPOCHS}")
+for i, (x_pos, ep) in enumerate(zip(folds_x, best_epochs)):
+    axes[2].text(x_pos, ep + 0.3, str(ep), ha="center", fontsize=10, fontweight="bold")
+axes[2].set_ylim(0, MAX_EPOCHS + 3)
+axes[2].set_xlabel("Fold"); axes[2].set_ylabel("Best Epoch")
+axes[2].set_title("Best Epoch per Fold\n(lower = earlier stopping)", fontweight="bold")
+axes[2].set_xticks(folds_x)
+axes[2].legend(fontsize=8); axes[2].grid(axis="y", alpha=0.4, zorder=0)
 
 plt.suptitle(
-    f"5-Fold Summary  |  Mean Val F1={mean_f1:.4f}±{std_f1:.4f}"
-    f"  |  Δ vs v1={delta:+.4f}",
+    f"MedOracle v2 — 5-Fold Training Summary\n"
+    f"Mean Val Macro-F1 = {mean_f1:.4f} ± {std_f1:.4f}   |   "
+    f"v1 baseline = 0.6403   |   Δ = {delta:+.4f}",
     fontsize=12, fontweight="bold",
 )
 plt.tight_layout()
-summary_plot_path = CHECKPOINT_DIR / "training_summary_v2.png"
-plt.savefig(summary_plot_path, dpi=100, bbox_inches="tight")
+plt.savefig(CHECKPOINT_DIR / "training_summary_v2.png", dpi=120)
 plt.show()
-plt.close()
-print(f"  Summary plot saved → {summary_plot_path}")
+print(f"  Summary chart saved → {CHECKPOINT_DIR / 'training_summary_v2.png'}")
 
 
 # ============================================================
@@ -826,35 +1053,157 @@ print(f"    - The full run_full_pipeline() export")
 
 
 # ============================================================
-# CELL 10 — Cross-dataset eval scaffold (SAVEE placeholder)
+# CELL 10 — Final evaluation on held-out test set
 # ============================================================
 
 print("\n" + "="*60)
-print("  Cross-Dataset Evaluation Scaffold")
+print("  FINAL TEST SET EVALUATION  (held-out, first time seen)")
 print("="*60)
-print("""
-  To run cross-dataset evaluation on SAVEE (or any held-out corpus):
+print(f"  Test set : {len(test_rows)} clips / {len(test_actors)} actors")
+print(f"  Sources  : {dict(Counter(r['source'] for r in test_rows))}\n")
 
-  1. Add SAVEE as a Kaggle dataset input.
-  2. Extract SAVEE frames with the same YOLO pipeline used for RAVDESS
-     (see kaggle_ravdess_extract.py for the extraction template).
-  3. Load the best checkpoint above:
+# ── Test DataLoader ────────────────────────────────────────────────────────────
+test_ds     = MultiCorpusDataset(test_rows, augment=False, skip_errors=True)
+test_loader = DataLoader(
+    test_ds,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=NUM_WORKERS,
+    pin_memory=(device.type == "cuda"),
+    collate_fn=multicorpus_collate_fn,
+)
 
-     ckpt = torch.load(best_ckpt, map_location=device)
-     model = VideoEmotionModel(pretrained=False, encoder_drop=0.3).to(device)
-     model.load_state_dict(ckpt["model_state_dict"])
+# Class weights from CV pool (same distribution as training — not from test)
+test_class_weights = get_class_weights(cv_rows).to(device)
+test_criterion     = nn.CrossEntropyLoss(
+    weight=test_class_weights, label_smoothing=LABEL_SMOOTHING
+)
 
-  4. Build a SAVEE manifest CSV with the same columns as unified_manifest.csv.
-  5. Create a MultiCorpusDataset(savee_rows, augment=False).
-  6. Run evaluate() on the DataLoader.
-  7. Report macro-F1 — compare to v1's ~0.29 on RAVDESS.
+# ── Evaluate every fold's best checkpoint on test ─────────────────────────────
+per_fold_test_f1 = []
 
-  Expected improvement rationale:
-    - RAVDESS actors in training should directly improve generalisation
-      to RAVDESS-style recordings.
-    - encoder_drop=0.3 reduces CREMA-D-specific texture overfitting.
-    - Color+saturation jitter reduces dataset-specific colour shift.
-    - Rotation ±10° increases robustness to camera angle variation.
-""")
+for fold_r in fold_results:
+    fold_num  = fold_r["fold"]
+    ckpt_path = Path(fold_r["checkpoint"])
 
-print("✓ Retrain v2 complete. All checkpoints saved to /kaggle/working/checkpoints_v2/")
+    ckpt  = torch.load(ckpt_path, map_location=device)
+    model = VideoEmotionModel(
+        pretrained=False, encoder_drop=ENCODER_DROPOUT,
+        lstm_drop=LSTM_DROPOUT, fc_drop=FC_DROPOUT,
+    ).to(device)
+    model.load_state_dict(ckpt["model_state_dict"])
+
+    _, test_f1, _, _ = evaluate(model, test_loader, test_criterion, device)
+
+    val_f1 = fold_r["val_macro_f1"]
+    gap    = val_f1 - test_f1
+    marker = "⚠" if gap > 0.10 else "✓"
+    print(f"  {marker} Fold {fold_num} | Val F1={val_f1:.4f}  "
+          f"Test F1={test_f1:.4f}  gap={gap:+.4f}")
+    per_fold_test_f1.append(test_f1)
+
+mean_test_f1 = float(np.mean(per_fold_test_f1))
+std_test_f1  = float(np.std(per_fold_test_f1))
+mean_val_f1  = float(np.mean([r["val_macro_f1"] for r in fold_results]))
+val_test_gap = mean_val_f1 - mean_test_f1
+
+print(f"\n  {'─'*50}")
+print(f"  Mean Test  F1 : {mean_test_f1:.4f} ± {std_test_f1:.4f}")
+print(f"  Mean Val   F1 : {mean_val_f1:.4f}  (guided early stopping)")
+print(f"  Val→Test gap  : {val_test_gap:+.4f}  "
+      f"{'(minimal — good generalisation)' if val_test_gap < 0.05 else '(val was optimistic)'}")
+print(f"  v1 baseline   : 0.6403")
+print(f"  Δ vs baseline : {mean_test_f1 - 0.6403:+.4f}")
+print(f"  {'─'*50}")
+
+# ── Full classification report on best checkpoint ─────────────────────────────
+best_fold_r = max(fold_results, key=lambda r: r["val_macro_f1"])
+best_ckpt   = torch.load(Path(best_fold_r["checkpoint"]), map_location=device)
+best_model  = VideoEmotionModel(
+    pretrained=False, encoder_drop=ENCODER_DROPOUT,
+    lstm_drop=LSTM_DROPOUT, fc_drop=FC_DROPOUT,
+).to(device)
+best_model.load_state_dict(best_ckpt["model_state_dict"])
+
+_, best_test_f1, best_preds, best_labels, best_probs = evaluate(
+    best_model, test_loader, test_criterion, device, return_probs=True
+)
+print(f"\n  Best checkpoint (Fold {best_fold_r['fold']})  "
+      f"Test Macro-F1 = {best_test_f1:.4f}")
+print(f"\n  Classification Report (best checkpoint on test set):\n")
+print(classification_report(
+    best_labels, best_preds,
+    target_names=EMOTION_LABELS, digits=4, zero_division=0,
+))
+
+# ── Test confusion matrix ──────────────────────────────────────────────────────
+cm_test = confusion_matrix(best_labels, best_preds)
+fig_t, ax_t = plt.subplots(figsize=(7, 6))
+im_t = ax_t.imshow(cm_test, interpolation="nearest", cmap="Oranges")
+plt.colorbar(im_t, ax=ax_t)
+ax_t.set_xticks(range(len(EMOTION_LABELS)))
+ax_t.set_yticks(range(len(EMOTION_LABELS)))
+ax_t.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+ax_t.set_yticklabels(EMOTION_LABELS)
+thresh_t = cm_test.max() / 2
+for i in range(cm_test.shape[0]):
+    for j in range(cm_test.shape[1]):
+        ax_t.text(j, i, str(cm_test[i, j]), ha="center", va="center",
+                  color="white" if cm_test[i, j] > thresh_t else "black", fontsize=11)
+ax_t.set_xlabel("Predicted"); ax_t.set_ylabel("True")
+ax_t.set_title(
+    f"Test Set Confusion Matrix — Fold {best_fold_r['fold']} best checkpoint\n"
+    f"Test Macro-F1 = {best_test_f1:.4f}",
+    fontweight="bold",
+)
+plt.tight_layout()
+plt.savefig(CHECKPOINT_DIR / "test_confusion_matrix.png", dpi=120)
+plt.show()
+
+# ── Normalised test confusion matrix ──────────────────────────────────────────
+cm_test_norm = cm_test.astype(np.float32) / cm_test.sum(axis=1, keepdims=True)
+fig_tn, ax_tn = plt.subplots(figsize=(7, 6))
+im_tn = ax_tn.imshow(cm_test_norm, interpolation="nearest", cmap="Oranges", vmin=0, vmax=1)
+plt.colorbar(im_tn, ax=ax_tn)
+ax_tn.set_xticks(range(len(EMOTION_LABELS)))
+ax_tn.set_yticks(range(len(EMOTION_LABELS)))
+ax_tn.set_xticklabels(EMOTION_LABELS, rotation=45, ha="right")
+ax_tn.set_yticklabels(EMOTION_LABELS)
+for i in range(cm_test_norm.shape[0]):
+    for j in range(cm_test_norm.shape[1]):
+        ax_tn.text(j, i, f"{cm_test_norm[i, j]:.2f}", ha="center", va="center",
+                   color="white" if cm_test_norm[i, j] > 0.5 else "black", fontsize=10)
+ax_tn.set_xlabel("Predicted"); ax_tn.set_ylabel("True")
+ax_tn.set_title("Test Set Normalised Confusion Matrix — Recall per Class",
+                fontweight="bold")
+plt.tight_layout()
+plt.savefig(CHECKPOINT_DIR / "test_confusion_matrix_norm.png", dpi=120)
+plt.show()
+
+# ── Save test softmax probabilities CSV ───────────────────────────────────────
+test_probs_path = CHECKPOINT_DIR / "test_probs.csv"
+with open(test_probs_path, "w", newline="", encoding="utf-8") as _f:
+    _w = csv.writer(_f)
+    _w.writerow(["true_label", "pred_label"] + [f"prob_{e}" for e in EMOTION_LABELS])
+    for true, pred, prob in zip(best_labels, best_preds, best_probs):
+        _w.writerow([IDX_TO_EMOTION[true], IDX_TO_EMOTION[pred]] + [f"{p:.6f}" for p in prob])
+print(f"  Test probs saved → {test_probs_path}")
+
+# ── Save test summary ──────────────────────────────────────────────────────────
+test_summary = {
+    "mean_test_macro_f1":      mean_test_f1,
+    "std_test_macro_f1":       std_test_f1,
+    "mean_val_macro_f1":       mean_val_f1,
+    "val_test_gap":            round(val_test_gap, 4),
+    "best_checkpoint_test_f1": round(best_test_f1, 4),
+    "per_fold_test_f1":        [round(f, 4) for f in per_fold_test_f1],
+    "test_actors":             sorted(test_actors),
+    "n_test_clips":            len(test_rows),
+    "v1_baseline":             0.6403,
+    "delta_vs_baseline":       round(mean_test_f1 - 0.6403, 4),
+}
+test_summary_path = CHECKPOINT_DIR / "test_summary_v2.json"
+with open(test_summary_path, "w") as f:
+    json.dump(test_summary, f, indent=2)
+print(f"  Test summary saved → {test_summary_path}")
+print(f"\n✓ Retrain v2 complete. All outputs in /kaggle/working/checkpoints_v2/")

@@ -22,7 +22,7 @@ Architecture
   Input  : (B, T, 2048)   — sequence of ResNet50 frame features
   BiLSTM : hidden=256 per direction × 2 directions = 512 effective
            2 stacked layers, inter-layer dropout=0.3
-  Output : hidden state at last timestep → (B, 512)
+  Output : mean-pooled BiLSTM output over all T timesteps → (B, 512)
   Head   : Linear(512 → 256) → ReLU → Dropout(0.4) → Linear(256 → 5)
   Final  : logits (B, 5)  +  softmax probabilities (B, 5)
 
@@ -117,20 +117,23 @@ class EmotionBiLSTM(nn.Module):
             "features" : (B, 512)          — BiLSTM output before classifier (for SHAP)
         """
         # lstm_out : (B, T, hidden_dim × 2)
-        # h_n      : (num_layers × 2, B, hidden_dim)  — final hidden states
-        lstm_out, (h_n, _) = self.lstm(x)
+        lstm_out, _ = self.lstm(x)
 
-        # Take the output at the last timestep
-        # lstm_out[:, -1, :] = (B, hidden_dim × 2)
-        last_hidden = lstm_out[:, -1, :]   # (B, 512)
+        # Mean-pool over all timesteps instead of taking only the last one.
+        # For a BiLSTM, lstm_out[:, -1, :] mixes the forward direction's full
+        # context with the backward direction's *single-frame* view (it has only
+        # seen the last frame), which is a weak representation. Averaging over all
+        # T timesteps uses both directions across the whole clip and trains far
+        # more smoothly.
+        pooled = lstm_out.mean(dim=1)   # (B, 512)
 
-        logits = self.classifier(last_hidden)   # (B, 5)
+        logits = self.classifier(pooled)   # (B, 5)
         probs  = F.softmax(logits, dim=-1)      # (B, 5)
 
         return {
             "logits":   logits,
             "probs":    probs,
-            "features": last_hidden,   # pre-classifier, used by SHAP
+            "features": pooled,   # pre-classifier, used by SHAP
         }
 
     # ── Utilities ────────────────────────────────────────────────────────────
