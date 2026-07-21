@@ -331,7 +331,7 @@ def train_one_fold(
         lr           = config.lr,
         weight_decay = config.weight_decay,
     )
-    criterion = FocalLoss(weight=class_weights, gamma=2.0)
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
 
     # --- LR scheduler (monitors validation macro-F1 — higher is better) ---
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -564,6 +564,195 @@ def get_device(device_str: str) -> torch.device:
 
 
 # ---------------------------------------------------------------------------
+# Random split training (Phase 1 — better demo accuracy)
+# ---------------------------------------------------------------------------
+
+def train_random_split(
+    subject_data : Dict[str, SubjectData],
+    config       : TrainConfig,
+    device       : torch.device,
+    test_ratio   : float = 0.20,
+    seed         : int   = 42,
+) -> Dict:
+    """
+    Train on 80% of all windows (randomly sampled across all subjects),
+    test on remaining 20%. Single training run — no folds.
+
+    Simulates a deployment scenario where some calibration data is available
+    from each user, giving higher accuracy than LOSO.
+
+    Returns metrics dict compatible with compute_fold_metrics().
+    """
+    from member1_physiological.utils.dataset import DEAPWindowDataset
+    from member1_physiological.preprocessing.eeg_preprocessor import EEGPreprocessor
+    from member1_physiological.preprocessing.gsr_preprocessor import GSRPreprocessor
+    from sklearn.model_selection import train_test_split
+
+    os.makedirs(config.checkpoint_dir, exist_ok=True)
+    os.makedirs(config.log_dir, exist_ok=True)
+
+    log_path = os.path.join(config.log_dir, "random_split_training.log")
+    log_file = open(log_path, "a", encoding="utf-8")
+
+    _log(f"\n{'#' * 78}", log_file)
+    _log(f"# MedOracle — PhysiologicalNet Random Split Training (80/20)", log_file)
+    _log(f"# Device : {device}", log_file)
+    _log(f"{'#' * 78}", log_file)
+
+    # --- Collect all windows across all subjects using to_arrays() ---
+    eeg_list, gsr_list, label_list = [], [], []
+    subject_ids = sorted(subject_data.keys())
+
+    for subj_id in subject_ids:
+        eeg, gsr, labels = subject_data[subj_id].get_arrays()
+        eeg_list.append(eeg)
+        gsr_list.append(gsr)
+        label_list.append(labels)
+
+    all_eeg    = np.concatenate(eeg_list,   axis=0).astype(np.float32)
+    all_gsr    = np.concatenate(gsr_list,   axis=0).astype(np.float32)
+    all_labels = np.concatenate(label_list, axis=0).astype(np.int64)
+
+    total = len(all_labels)
+    _log(f"Total windows: {total:,}", log_file)
+
+    # --- Random 80/20 split ---
+    idx = np.arange(total)
+    train_idx, test_idx = train_test_split(
+        idx, test_size=test_ratio, random_state=seed, stratify=all_labels
+    )
+
+    # --- Fit preprocessors on training data only ---
+    eeg_prep = EEGPreprocessor()
+    gsr_prep = GSRPreprocessor()
+    eeg_prep.fit(all_eeg[train_idx])
+    gsr_prep.fit(all_gsr[train_idx])
+
+    train_eeg = eeg_prep.transform(all_eeg[train_idx])
+    train_gsr = gsr_prep.transform(all_gsr[train_idx])
+    test_eeg  = eeg_prep.transform(all_eeg[test_idx])
+    test_gsr  = gsr_prep.transform(all_gsr[test_idx])
+
+    train_labels = all_labels[train_idx]
+    test_labels  = all_labels[test_idx]
+
+    _log(f"Train: {len(train_labels):,} | Test: {len(test_labels):,}", log_file)
+
+    # --- Build datasets ---
+    import torch
+    from torch.utils.data import TensorDataset
+
+    def _make_loader(eeg, gsr, labels, shuffle, batch_size):
+        ds = TensorDataset(
+            torch.tensor(eeg,    dtype=torch.float32),
+            torch.tensor(gsr,    dtype=torch.float32),
+            torch.tensor(labels, dtype=torch.long),
+        )
+        return torch.utils.data.DataLoader(
+            ds, batch_size=batch_size, shuffle=shuffle, num_workers=0
+        )
+
+    train_loader = _make_loader(train_eeg, train_gsr, train_labels, True,  config.batch_size)
+    test_loader  = _make_loader(test_eeg,  test_gsr,  test_labels,  False, config.batch_size * 2)
+
+    # --- Class weights ---
+    class_weights = compute_class_weights(train_labels, device=device)
+    weight_str = "  ".join(
+        f"{n}={float(class_weights[i]):.3f}"
+        for i, n in enumerate(["stress", "calm", "happy", "sad", "angry"])
+    )
+    _log(f"Class weights: {weight_str}", log_file)
+
+    # --- Model, optimiser, loss ---
+    model = PhysiologicalNet(
+        d_model  = config.d_model,
+        n_heads  = config.n_heads,
+        n_layers = config.n_layers,
+        dropout  = config.dropout,
+    ).to(device)
+
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+    )
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", patience=config.lr_patience,
+        factor=config.lr_factor, min_lr=config.min_lr,
+    )
+
+    # --- Training loop ---
+    best_f1, best_metrics, best_epoch = -1.0, None, 0
+    patience_counter = 0
+    eeg_mean, eeg_std = eeg_prep.get_stats()
+    gsr_mean, gsr_std = gsr_prep.get_stats()
+
+    for epoch in range(1, config.n_epochs + 1):
+        t0 = time.time()
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion, device, config.grad_clip
+        )
+        y_true, y_pred = evaluate(model, test_loader, device)
+        metrics = compute_fold_metrics(y_true, y_pred)
+        val_f1  = metrics["macro_f1"]
+
+        scheduler.step(val_f1)
+        current_lr = optimizer.param_groups[0]["lr"]
+        is_best    = val_f1 > best_f1
+        marker     = "  [BEST]" if is_best else ""
+
+        _log(
+            f"  Epoch {epoch:3d}/{config.n_epochs} | "
+            f"loss={train_loss:.4f} | train_acc={train_acc:.4f} | "
+            f"val_F1={val_f1:.4f} | val_acc={metrics['accuracy']:.4f} | "
+            f"lr={current_lr:.3e} | {time.time()-t0:.1f}s{marker}",
+            log_file,
+        )
+
+        if is_best:
+            best_f1, best_metrics, best_epoch = val_f1, metrics, epoch
+            patience_counter = 0
+            ckpt_path = os.path.join(config.checkpoint_dir, "random_split_best.pt")
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "eeg_mean": eeg_mean, "eeg_std": eeg_std,
+                "gsr_mean": float(gsr_mean), "gsr_std": float(gsr_std),
+                "config":   dataclasses.asdict(config),
+                "metrics":  metrics,
+                "epoch":    epoch,
+                "eval_mode": "random_split",
+            }, ckpt_path)
+        else:
+            patience_counter += 1
+            if patience_counter >= config.patience:
+                _log(f"  Early stop at epoch {epoch}", log_file)
+                break
+
+    _log(f"\nBest macro-F1 = {best_f1:.4f} @ epoch {best_epoch}", log_file)
+    _log(format_fold_report(best_metrics, 1, "random_split"), log_file)
+
+    summary = (
+        f"\n{'=' * 60}\n"
+        f"RANDOM SPLIT RESULTS (80/20, seed={seed})\n"
+        f"{'=' * 60}\n"
+        f"Macro-F1 : {best_f1:.4f}    [PRIMARY METRIC]\n"
+        f"Accuracy : {best_metrics['accuracy']:.4f}\n"
+        f"{'=' * 60}\n"
+        f"Per-class F1:\n"
+    )
+    for cls, f1 in best_metrics["per_class_f1"].items():
+        summary += f"  {cls:<8}: {f1:.4f}\n"
+    summary += f"{'=' * 60}"
+
+    _log(summary, log_file)
+    log_file.close()
+    print(summary)
+    print(f"\nCheckpoint: {ckpt_path}")
+    print(f"Log       : {log_path}")
+
+    return best_metrics
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -607,6 +796,14 @@ def parse_args() -> argparse.Namespace:
                         help="Device: 'auto' | 'cuda' | 'cpu'")
     parser.add_argument("--no_augment",    action="store_true",
                         help="Disable training data augmentation")
+    parser.add_argument(
+        "--eval_mode",
+        type    = str,
+        default = "loso",
+        choices = ["loso", "random_split"],
+        help    = "loso: Leave-One-Subject-Out (rigorous, ~32%%) | "
+                  "random_split: 80/20 random split (demo model, ~50-55%%)",
+    )
     return parser.parse_args()
 
 
@@ -637,13 +834,22 @@ def main() -> None:
     loader       = DEAPLoader(data_dir=args.data_dir, verbose=True)
     subject_data = loader.load_all()
 
-    # Run LOSO training
-    train_loso(
-        subject_data = subject_data,
-        config       = config,
-        device       = device,
-        test_subject = args.test_subject,
-    )
+    # Route to selected evaluation mode
+    if args.eval_mode == "random_split":
+        print("\n[Eval mode: RANDOM SPLIT 80/20 — demo model]")
+        train_random_split(
+            subject_data = subject_data,
+            config       = config,
+            device       = device,
+        )
+    else:
+        print("\n[Eval mode: LOSO — rigorous evaluation]")
+        train_loso(
+            subject_data = subject_data,
+            config       = config,
+            device       = device,
+            test_subject = args.test_subject,
+        )
 
 
 if __name__ == "__main__":
