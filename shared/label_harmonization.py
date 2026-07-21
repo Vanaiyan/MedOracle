@@ -53,7 +53,7 @@ EMOTION_CLASSES: dict[str, int] = {
     "angry":  4,
 }
 
-_THRESHOLD = 4.5   # lowered from 5.0 to increase happy class representation
+_THRESHOLD = 5.0   # midpoint of the 1–9 DEAP rating scale
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +127,15 @@ def map_deap_to_class(
     if not v_hi and not a_hi and not d_hi:  return "sad"
     if not v_hi and     a_hi and     d_hi:  return "angry"
 
-    # --- unclassifiable combinations (2 remaining cells in the 2×2×2 cube) ---
-    # V_hi, A_hi, D_lo  → no standard emotion label
-    # V_hi, A_lo, D_lo  → no standard emotion label
+    # --- Russell (1980) extension for happy ---
+    # V_hi, A_hi, D_lo → happy (Russell's Circumplex defines happy as high V + high A,
+    # without requiring high dominance. Dominance is Mehrabian's PAD addition.
+    # Using Russell's simpler 2D definition here recovers previously unclassified
+    # high-valence high-arousal samples, increasing happy class representation.)
+    if v_hi and a_hi and not d_hi:  return "happy"
+
+    # --- remaining unclassifiable combination ---
+    # V_hi, A_lo, D_lo → no standard emotion label in either model
     return None
 
 
