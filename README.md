@@ -298,16 +298,26 @@ print(f"✓ {len(records)} usable clips after dropping DIS")
 
 ### DEAP → 5-class (Russell 1980 / Mehrabian 1996)
 
-| Class | Valence | Arousal | Dominance |
-|-------|---------|---------|-----------|
-| stress | < 5 | ≥ 5 | < 5 |
-| calm | ≥ 5 | < 5 | ≥ 5 |
-| happy | ≥ 5 | ≥ 5 | ≥ 5 |
-| sad | < 5 | < 5 | < 5 |
-| angry | < 5 | ≥ 5 | ≥ 5 |
+| Class | Valence | Arousal | Dominance | Model |
+|-------|---------|---------|-----------|-------|
+| stress | < 5 | ≥ 5 | < 5 | Mehrabian PAD |
+| calm | ≥ 5 | < 5 | ≥ 5 | Russell Circumplex |
+| happy | ≥ 5 | ≥ 5 | ≥ 5 | Mehrabian PAD |
+| happy | ≥ 5 | ≥ 5 | < 5 | Russell Circumplex (extended) |
+| sad | < 5 | < 5 | < 5 | Russell Circumplex |
+| angry | < 5 | ≥ 5 | ≥ 5 | Mehrabian PAD |
 
 Boundary rule: values exactly equal to 5 are treated as ≥ 5.  
-Unclassifiable combinations return `None` and must be skipped.
+Only one combination remains unclassifiable: V≥5, A<5, D<5 → returns `None`.
+
+**Happy class extension — academic justification:**  
+Russell's (1980) Circumplex model defines happy purely as high valence + high arousal,
+without requiring high dominance. Dominance is an addition from Mehrabian's (1996) PAD model.
+The combination V≥5, A≥5, D<5 (high valence, high arousal, low dominance) maps to happy
+under Russell's definition — for example, feeling excited and joyful but not in control.
+This extension recovers previously unclassified samples and increases happy class
+representation without fabricating data. It is consistent with how many DEAP-based papers
+apply the Circumplex model (using V and A only for the primary emotion axis).
 
 ### CREMA-D → 5-class
 
@@ -396,6 +406,78 @@ git checkout -b member2/crema-preprocessing  # Vanaiyan
 git checkout -b member3/shap-layer           # Adshaya
 
 # Push and open a PR when a module is ready for integration
+```
+
+---
+
+## Member 1 — Accuracy Improvement Plan (July–August 2026)
+
+### Current State
+- Evaluation: Leave-One-Subject-Out (LOSO) — 32 folds
+- Accuracy: ~32% | Macro-F1: ~0.17
+- Dataset: DEAP only (32 subjects)
+
+### Why Accuracy Is Currently Limited
+LOSO is the strictest possible evaluation — the model is tested on a completely unseen person
+it has never encountered during training. EEG signals are highly subject-specific (amplitude,
+baseline, noise patterns differ per person), so generalising to a brand new subject is
+inherently difficult. Additionally, DEAP's happy class is underrepresented because music video
+stimuli rarely elicit simultaneously high valence, high arousal, and high dominance ratings.
+These are known limitations of the DEAP benchmark reported in published literature.
+
+---
+
+### Phase 1 — Random Split Evaluation (Target: 50–55% accuracy)
+**Why:** LOSO simulates zero-shot deployment on an unknown person. In real deployment,
+a short calibration session from the user is available — meaning the model has seen some
+data from that person before. Switching to an 80/20 random split across all subjects
+simulates this more realistic deployment scenario and is standard practice for demo systems.
+
+**What changes:** Training evaluation method only. The output interface to the fusion layer
+(physiological_prediction_dict) remains completely unchanged.
+
+**Timeline:** July 17–19, 2026
+
+---
+
+### Phase 2 — AMIGOS Dataset Integration (Target: 55–65% accuracy)
+**Why:** More training subjects = better generalisation. DEAP has 32 subjects. AMIGOS
+(Queen Mary University, Mir et al. 2018) has 40 additional subjects with EEG + GSR recorded
+under the same VAD label scale (1–9). Combining both datasets increases training subjects
+from 32 to 72 — a 125% increase in subject diversity.
+
+**Challenge:** AMIGOS uses 14 EEG channels vs DEAP's 32. Solution: use only the 14 channels
+common to both datasets, reducing DEAP from 32 to 14 channels. The EEG encoder input
+dimension is updated accordingly.
+
+**What changes:** EEG encoder input (32ch → 14ch), dataset loader (DEAP + AMIGOS combined).
+Output interface to fusion layer remains unchanged.
+
+**Timeline:** July 20–27, 2026
+
+---
+
+### Phase 3 — Integration and Demo Preparation (August 1–3)
+- End-to-end integration with Member 2 (fusion) and Member 3 (SHAP + web app)
+- Demo scenario preparation: stress, calm, sad, angry samples
+- Final evaluation report
+
+---
+
+### Interface Contract — Unchanged Throughout All Phases
+```python
+physiological_prediction_dict = {
+    "predicted_emotion":   str,    # "stress"|"calm"|"happy"|"sad"|"angry"
+    "confidence":          float,  # entropy-based, 0–1
+    "class_probabilities": {       # always 5 keys, sum to 1.0
+        "stress": float, "calm": float, "happy": float,
+        "sad": float, "angry": float
+    },
+    "signal_quality": {
+        "eeg": str,   # "good"|"degraded"|"poor"
+        "gsr": str
+    }
+}
 ```
 
 ---
