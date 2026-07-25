@@ -186,6 +186,67 @@ async def _call_deepseek(messages: List[dict], system: str) -> str:
         return resp.json()["choices"][0]["message"]["content"].strip()
 
 
+async def _call_groq(messages: List[dict], system: str) -> str:
+    """Call Groq (free, OpenAI-compatible) using GROQ_API_KEY."""
+    import httpx
+
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY not set")
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, *messages],
+        "temperature": 0.7,
+        "max_tokens": 700,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Groq HTTP {resp.status_code}: {resp.text[:400]}")
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+async def _call_gemini(messages: List[dict], system: str) -> str:
+    """Call Google Gemini via REST using GEMINI_API_KEY."""
+    import httpx
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent?key={api_key}"
+    )
+    # Gemini roles are "user"/"model"; map "assistant" -> "model".
+    contents = [
+        {"role": "model" if m.get("role") == "assistant" else "user",
+         "parts": [{"text": m.get("content", "")}]}
+        for m in messages
+    ]
+    payload = {
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 700},
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(url, json=payload)
+        if resp.status_code != 200:
+            # Surface Google's actual error text so we can diagnose (bad model
+            # name, invalid key, etc.) from the server log.
+            raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:400]}")
+        data = resp.json()
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except (KeyError, IndexError):
+            raise RuntimeError(f"Gemini unexpected response: {str(data)[:400]}")
+
+
 # ---------------------------------------------------------------------------
 # Simulated fallback (no API key needed)
 # ---------------------------------------------------------------------------
@@ -364,12 +425,32 @@ async def get_llm_response(
     shap_output: dict,
     user_message: str,
     conversation_history: Optional[List[dict]] = None,
+    grounding_facts: Optional[List[str]] = None,
 ) -> str:
     # ── 1. Off-topic guard ────────────────────────────────────────────────
     if not _is_on_topic(user_message):
         return _OFF_TOPIC_REPLY
 
     context_block = _build_context_block(shap_output)
+
+    # ── 1b. RAG grounding — inject retrieved sources into the system prompt ─
+    system = _SYSTEM_PROMPT
+    if grounding_facts:
+        facts_txt = "\n".join(f"- {f}" for f in grounding_facts)
+        system = system + (
+            "\n\n=== GROUNDING SOURCES — you MUST use these ===\n"
+            f"{facts_txt}\n\n"
+            "CITATION RULES FOR THIS ANSWER (override brevity if needed):\n"
+            "1. Explain the science using ONLY these sources.\n"
+            "2. You MUST place an inline citation in square brackets IMMEDIATELY after "
+            "each scientific claim — e.g. \"elevated GSR reflects sympathetic arousal "
+            "[Kreibig 2010]\". Do NOT collect all citations at the end.\n"
+            "3. Your answer MUST contain at least two inline [Author Year] citations "
+            "drawn from the sources above.\n"
+            "4. After each cited fact, connect it to THIS session's numbers (predicted "
+            "emotion, trusted modality, signal quality).\n"
+            "5. Do not invent facts or citations beyond the sources above."
+        )
 
     # ── 2. Build message list ─────────────────────────────────────────────
     if not conversation_history:
@@ -396,13 +477,14 @@ async def get_llm_response(
             }
         messages.append({"role": "user", "content": user_message})
 
-    # ── 3. Try DeepSeek ───────────────────────────────────────────────────
-    try:
-        return await _call_deepseek(messages, _SYSTEM_PROMPT)
-    except Exception as exc:
-        logger.warning("DeepSeek call failed (%s: %s) — using simulated fallback.", type(exc).__name__, exc)
+    # ── 3. Try live LLMs: Groq, then Gemini, then OpenRouter/DeepSeek ──────
+    for caller in (_call_groq, _call_gemini, _call_deepseek):
+        try:
+            return await caller(messages, system)
+        except Exception as exc:
+            logger.warning("%s failed (%s: %s)", caller.__name__, type(exc).__name__, exc)
 
-    # ── 4. Simulated fallback ─────────────────────────────────────────────
+    # ── 4. Simulated fallback (no API key / all providers failed) ──────────
     return _simulated_response(shap_output, user_message)
 
 
