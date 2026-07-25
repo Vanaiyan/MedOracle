@@ -15,6 +15,8 @@ from __future__ import annotations
 import random
 from typing import Optional
 
+from member3_explainability.conflict.gate import run_gate, physio_quality_of
+
 EMOTIONS = ["stress", "calm", "happy", "sad", "angry"]
 QUALITIES = ["good", "good", "good", "degraded", "poor"]   # weighted — mostly good
 
@@ -61,9 +63,6 @@ def generate_prediction_output(emotion: Optional[str] = None) -> dict:
     elif emotion not in EMOTIONS:
         raise ValueError(f"emotion must be one of {EMOTIONS}, got '{emotion}'")
 
-    # Fused confidence (how sure the fused model is)
-    fused_confidence = round(random.uniform(0.60, 0.92), 4)
-
     # Per-modality predictions — modalities always agree on the dominant emotion
     # but with different confidence levels to create interesting SHAP spread.
     # Both must predict the same emotion as the fused output to ensure
@@ -88,17 +87,20 @@ def generate_prediction_output(emotion: Optional[str] = None) -> dict:
     gsr_quality   = eeg_gsr_levels[1]
     video_quality = random.choice(QUALITIES)
 
-    # Modality weights — physio + video sum to 1.0
-    physio_weight = round(random.uniform(0.30, 0.70), 4)
-    video_weight  = round(1.0 - physio_weight, 4)
+    # Modality weights + fused output are derived from the SAME quality gate the
+    # conflict layer uses, so weights respect signal quality (a 'poor' modality
+    # gets a low weight) and Session Detail, SHAP, and the conflict panel agree.
+    pq = physio_quality_of(eeg_quality, gsr_quality)
+    trace = run_gate(physio_probs, video_probs, pq, video_quality)
+    fused_probs = {k: round(v, 4) for k, v in trace.fused_probs.items()}
 
     return {
-        "predicted_emotion":   emotion,
-        "confidence":          fused_confidence,
-        "class_probabilities": _make_class_probs(emotion, fused_confidence),
+        "predicted_emotion":   trace.fused_emotion,
+        "confidence":          round(trace.fused_confidence, 4),
+        "class_probabilities": fused_probs,
         "modality_weights": {
-            "physio": physio_weight,
-            "video":  video_weight,
+            "physio": round(trace.w_physio, 4),
+            "video":  round(trace.w_video, 4),
         },
         "signal_quality": {
             "eeg":   eeg_quality,

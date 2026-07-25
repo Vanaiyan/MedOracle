@@ -83,6 +83,7 @@ export default function Dashboard() {
   const [summary, setSummary] = useState(null);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [sessionDetail, setSessionDetail] = useState(null);
+  const [lastResult, setLastResult] = useState(null);   // most recent prediction result
   const [autoExplanation, setAutoExplanation] = useState(null);
   const [runningPrediction, setRunningPrediction] = useState(false);
   const [demoEmotion, setDemoEmotion] = useState('stress');
@@ -106,22 +107,23 @@ export default function Dashboard() {
     sessionsAPI.detail(activeSessionId).then(r => setSessionDetail(r.data)).catch(() => { });
   }, [activeSessionId]);
 
-  const sessionStats = sessionDetail
+  // Cards follow the active session (selected from history) or the latest
+  // prediction; fall back to the all-time aggregate only when nothing is active.
+  const activeSource = sessionDetail || lastResult;
+  const sessionStats = activeSource
     ? {
       ...summary,
       session_count: summary?.session_count ?? null,
-      dominant_emotion: sessionDetail.predicted_emotion,
-      // Use SHAP feature importance to pick top modality (consistent with the bar chart)
-      // EEG + GSR together = physio; if their combined importance beats video → physio wins
+      dominant_emotion: activeSource.predicted_emotion,
+      // Top modality = signal with highest SHAP importance for this prediction.
       dominant_modality: (() => {
-        const fi = sessionDetail.feature_importance;
+        const fi = activeSource.feature_importance;
         if (fi) {
-          // Return the single signal with highest SHAP importance
           return Object.entries(fi).reduce((a, b) => b[1] > a[1] ? b : a)[0];
         }
         return 'video';
       })(),
-      avg_confidence: sessionDetail.confidence,
+      avg_confidence: activeSource.confidence,
     }
     : null;
 
@@ -131,6 +133,7 @@ export default function Dashboard() {
     setRunningPrediction(true);
     try {
       const { data } = await predictAPI.predictVideo(videoFile);
+      setLastResult(data);
       setActiveSessionId(data.session_id);
       setVideoFile(null);
       try {
@@ -153,6 +156,7 @@ export default function Dashboard() {
     setRunningPrediction(true);
     try {
       const { data } = await conflictAPI.generate();
+      setLastResult(data);
       setActiveSessionId(data.session_id);
       setAutoExplanation(null);
       loadSummary();
@@ -168,6 +172,7 @@ export default function Dashboard() {
     setRunningPrediction(true);
     try {
       const { data } = await predictAPI.predictSynthetic(demoEmotion);
+      setLastResult(data);
       setActiveSessionId(data.session_id);
       // Get auto-explanation from LLM
       try {

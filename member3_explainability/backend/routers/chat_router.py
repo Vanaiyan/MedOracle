@@ -23,8 +23,12 @@ from member3_explainability.backend.schemas import (
     ChatRequest, ChatResponse, ChatHistoryResponse, ChatMessageOut,
 )
 from member3_explainability.backend.llm_client import get_llm_response
+from member3_explainability.evaluation.knowledge_base import Retriever
 
 router = APIRouter(prefix="/chat", tags=["Chatbot"])
+
+# RAG retriever over the curated citation knowledge base (shared instance).
+_retriever = Retriever()
 
 
 @router.post("", response_model=ChatResponse)
@@ -92,12 +96,27 @@ async def chat(
     db.add(user_msg)
     await db.flush()
 
-    # Call LLM
+    # RAG: retrieve relevant curated citations and pass them as GROUNDING so the
+    # LLM reasons from them and cites inline (not just a footer).
+    rag_query = (
+        f"{body.message} {session.predicted_emotion} "
+        f"signal quality confidence arousal valence"
+    )
+    facts = _retriever.retrieve(rag_query, k=3)
+    grounding_facts = [f"[{f.citation}] {f.text}" for f in facts]
+
     llm_reply = await get_llm_response(
         shap_output=shap_output,
         user_message=body.message,
         conversation_history=conversation_history if conversation_history else None,
+        grounding_facts=grounding_facts or None,
     )
+
+    # Fallback only: if the model did not cite inline (e.g. the offline simulated
+    # path), append a compact source list so RAG stays visible.
+    if facts and "[" not in llm_reply and "Sources:" not in llm_reply:
+        sources = "; ".join(dict.fromkeys(f.citation for f in facts))
+        llm_reply = f"{llm_reply}\n\nSources: {sources}"
 
     # Store assistant message
     now = datetime.utcnow()
