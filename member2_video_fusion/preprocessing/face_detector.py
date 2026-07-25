@@ -413,46 +413,42 @@ def assess_clip_quality(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys, random, csv
+    import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-    from member2_video_fusion.preprocessing.dataset import sample_frames_uniform
-
-    MANIFEST = "data/CREMA-D/manifest.csv"
 
     print("=== Initialising FaceDetector ===")
     detector = FaceDetector()
     print(f"Backend: {detector.backend}")
 
-    # Load manifest and pick one clip per emotion class
-    rows = []
-    with open(MANIFEST) as f:
-        rows = list(csv.DictReader(f))
+    # Build a test clip: read a real video if a path is given, else use a
+    # synthetic random clip (self-contained — no dataset module / manifest needed).
+    if len(sys.argv) > 1:
+        import cv2 as _cv2
+        cap = _cv2.VideoCapture(sys.argv[1])
+        _frames = []
+        while True:
+            ok, f = cap.read()
+            if not ok or f is None:
+                break
+            _frames.append(_cv2.cvtColor(f, _cv2.COLOR_BGR2RGB))
+        cap.release()
+        idx = np.linspace(0, len(_frames) - 1, 16, dtype=int)
+        frames = np.stack([_frames[i] for i in idx])
+        print(f"Loaded {len(_frames)} frames from {sys.argv[1]}, sampled 16")
+    else:
+        frames = (np.random.rand(16, 480, 640, 3) * 255).astype(np.uint8)
+        print("No video path given — using a synthetic (16, 480, 640, 3) random clip")
 
-    from collections import defaultdict
-    by_emotion = defaultdict(list)
-    for r in rows:
-        by_emotion[r["emotion"]].append(r)
+    cropped, quality, metrics = process_clip(frames, detector)
 
-    print(f"\n{'Emotion':<10} {'Quality':<10} {'Det.Rate':<10} {'LapVar':<10} "
-          f"{'AreaRatio':<12} {'Shape'}")
-    print("-" * 70)
-
-    for emotion in sorted(by_emotion):
-        row    = random.choice(by_emotion[emotion])
-        frames = sample_frames_uniform(row["path"], n_frames=16)
-        if frames is None:
-            print(f"{emotion:<10} SKIP (unreadable)")
-            continue
-
-        cropped, quality, metrics = process_clip(frames, detector)
-
-        print(
-            f"{emotion:<10} {quality:<10} "
-            f"{metrics['face_detection_rate']:.2f}      "
-            f"{metrics['mean_laplacian_var']:<10.1f} "
-            f"{metrics['mean_face_area_ratio']:.3f}        "
-            f"{tuple(cropped.shape)}"
-        )
+    print(f"\n{'Quality':<10} {'Det.Rate':<10} {'LapVar':<10} {'AreaRatio':<12} {'Shape'}")
+    print("-" * 60)
+    print(
+        f"{quality:<10} "
+        f"{metrics['face_detection_rate']:<10.2f} "
+        f"{metrics['mean_laplacian_var']:<10.1f} "
+        f"{metrics['mean_face_area_ratio']:<12.3f} "
+        f"{tuple(cropped.shape)}"
+    )
 
     print("\n✓ Face detector smoke test complete")
