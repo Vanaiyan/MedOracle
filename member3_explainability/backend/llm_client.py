@@ -172,7 +172,7 @@ async def _call_deepseek(messages: List[dict], system: str) -> str:
     payload = {
         "model": "deepseek/deepseek-chat",
         "messages": [{"role": "system", "content": system}, *messages],
-        "temperature": 0.7,
+        "temperature": 0.4,
         "max_tokens": 512,
     }
 

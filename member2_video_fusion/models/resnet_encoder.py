@@ -8,12 +8,19 @@ ResNet50 frame encoder.
 Extracts a 2048-dimensional feature vector from each face-cropped frame.
 These per-frame features are then fed as a sequence into the BiLSTM.
 
-Fine-tuning strategy (He et al., 2016 — ResNet)
--------------------------------------------------
-  FROZEN   : layer1, layer2   — keep low-level ImageNet edges/textures
-  TRAINABLE: layer3, layer4   — learn emotion-relevant mid/high-level features
-  TRAINABLE: avgpool          — global average pooling (unchanged architecture)
-  REMOVED  : fc               — original ImageNet 1000-class head, not needed
+Fine-tuning strategy (v3.1 — discriminative fine-tune)
+------------------------------------------------------
+  FROZEN   : conv1, bn1, layer1, layer2, layer3 — low/mid ImageNet features.
+  TRAINABLE: layer4 conv weights — adapt the high-level features to faces, BUT
+             trained at a very low LR (1e-5) by the training loop so they adapt
+             slowly and cannot memorise actor identity (the v2 failure mode).
+  FROZEN-BN: every BatchNorm in the backbone (incl. layer4) is kept in eval()
+             mode via the train() override, so running stats never drift →
+             stable features and smooth validation curves.
+  REMOVED  : fc                 — original ImageNet 1000-class head, not needed
+
+  This is the middle path between v2 (full layer4 fine-tune → train/val gap
+  ~0.25) and a fully-frozen backbone (→ severe underfitting).
 
 Output per frame: 2048-dim feature vector (avgpool output)
 
@@ -39,8 +46,9 @@ class ResNet50Encoder(nn.Module):
     """
     Pretrained ResNet50 with the classification head removed.
 
-    layer1 + layer2 are frozen (ImageNet low-level features preserved).
-    layer3 + layer4 are fine-tuned to learn emotion-relevant features.
+    conv1/bn1/layer1/layer2/layer3 are frozen; only layer4's conv weights are
+    trainable (at a low LR set by the training loop). All BatchNorm layers are
+    kept in eval() mode permanently so their running statistics never drift.
 
     Parameters
     ----------
@@ -73,8 +81,8 @@ class ResNet50Encoder(nn.Module):
         self.maxpool = backbone.maxpool
         self.layer1  = backbone.layer1   # frozen
         self.layer2  = backbone.layer2   # frozen
-        self.layer3  = backbone.layer3   # fine-tuned
-        self.layer4  = backbone.layer4   # fine-tuned
+        self.layer3  = backbone.layer3   # frozen
+        self.layer4  = backbone.layer4   # conv weights trainable (low LR); BN frozen
         self.avgpool = backbone.avgpool  # global average pool → (B, 2048, 1, 1)
 
         self.dropout = nn.Dropout(p=dropout) if dropout > 0 else nn.Identity()
@@ -85,11 +93,43 @@ class ResNet50Encoder(nn.Module):
     # ── Freezing ────────────────────────────────────────────────────────────
 
     def _freeze_layers(self) -> None:
-        """Freeze conv1, bn1, layer1, layer2. Everything else stays trainable."""
-        frozen_modules = [self.conv1, self.bn1, self.layer1, self.layer2]
-        for module in frozen_modules:
-            for param in module.parameters():
-                param.requires_grad = False
+        """Freeze everything except layer4's conv weights (discriminative fine-tune).
+
+        v3.1 — the middle path between v2 (full layer4 fine-tune → overfit) and
+        the fully-frozen v3 (→ underfit). conv1, bn1, layer1, layer2, layer3 stay
+        frozen. layer4's convolutional weights become trainable so the high-level
+        features can adapt to faces — but the training loop runs them at a very
+        low LR (1e-5) so they adapt slowly and cannot memorise actor identity.
+
+        BatchNorm parameters (in layer4 too) stay frozen, and all BN running
+        statistics are frozen via the train() override below — this keeps the
+        features stable and the validation curves smooth.
+        """
+        # 1. Freeze the entire backbone
+        for param in self.parameters():
+            param.requires_grad = False
+        # 2. Unfreeze ONLY layer4's non-BatchNorm weights (conv layers)
+        for module in self.layer4.modules():
+            if not isinstance(module, nn.BatchNorm2d):
+                for param in module.parameters(recurse=False):
+                    param.requires_grad = True
+
+    def train(self, mode: bool = True):
+        """Keep the frozen backbone permanently in eval() mode.
+
+        Even with requires_grad=False, a normal model.train() call would put the
+        BatchNorm layers into training mode and let their running mean/var drift
+        batch-to-batch — producing unstable features and noisy validation curves.
+        Setting `training = False` on every submodule freezes the BatchNorm
+        statistics so the encoder behaves as a truly fixed feature extractor.
+
+        Note: we assign the flag directly (rather than calling .eval()) to avoid
+        re-dispatching back into this overridden train() and recursing.
+        """
+        super().train(mode)
+        for module in self.modules():
+            module.training = False
+        return self
 
     def unfreeze_layer(self, layer_name: str) -> None:
         """
@@ -162,7 +202,7 @@ if __name__ == "__main__":
 
     # ── 1. Parameter summary
     summary = encoder.param_summary()
-    print(f"Parameters:")
+    print("Parameters:")
     print(f"  Total     : {summary['total']:,}")
     print(f"  Trainable : {summary['trainable']:,}  ({summary['trainable_pct']}%)")
     print(f"  Frozen    : {summary['frozen']:,}")
@@ -183,13 +223,32 @@ if __name__ == "__main__":
     print(f"\nBatch of 8    input : {tuple(dummy_batch.shape)}")
     print(f"Batch of 8   output : {tuple(features_batch.shape)} ✓")
 
-    # ── 4. Verify layer1/layer2 are frozen, layer3/layer4 are trainable
-    frozen_check    = all(not p.requires_grad for p in encoder.layer1.parameters())
-    frozen_check   &= all(not p.requires_grad for p in encoder.layer2.parameters())
-    trainable_check = any(p.requires_grad for p in encoder.layer3.parameters())
-    trainable_check &= any(p.requires_grad for p in encoder.layer4.parameters())
+    # ── 4. Verify layer1-3 frozen, layer4 conv trainable, all BN frozen
+    early_frozen = all(
+        not p.requires_grad
+        for m in (encoder.layer1, encoder.layer2, encoder.layer3)
+        for p in m.parameters()
+    )
+    layer4_conv_trainable = any(
+        p.requires_grad
+        for mod in encoder.layer4.modules() if isinstance(mod, nn.Conv2d)
+        for p in mod.parameters(recurse=False)
+    )
+    layer4_bn_frozen = all(
+        not p.requires_grad
+        for mod in encoder.layer4.modules() if isinstance(mod, nn.BatchNorm2d)
+        for p in mod.parameters(recurse=False)
+    )
+    print(f"\nLayer1-3 frozen        : {early_frozen} ✓")
+    print(f"Layer4 conv trainable  : {layer4_conv_trainable} ✓")
+    print(f"Layer4 BatchNorm frozen: {layer4_bn_frozen} ✓")
 
-    print(f"\nLayer1 frozen    : {frozen_check} ✓")
-    print(f"Layer3 trainable : {trainable_check} ✓")
+    # ── 5. Verify train() keeps BatchNorm in eval mode (no running-stat drift)
+    encoder.train()
+    bn_in_eval = all(
+        not m.training for m in encoder.modules()
+        if isinstance(m, nn.BatchNorm2d)
+    )
+    print(f"BatchNorm stays eval   : {bn_in_eval} ✓ (after encoder.train())")
 
     print("\n✓ ResNet50Encoder checks passed")

@@ -31,10 +31,14 @@ Actor ID namespacing (avoids GroupKFold collision)
 Augmentation (training only, applied identically to all T=16 frames)
 ---------------------------------------------------------------------
     1. Random horizontal flip          (p=0.5)
-    2. Color jitter: brightness ±20%, contrast ±20%, saturation ±20%
+    2. Color jitter: brightness ±30%, contrast ±30%, saturation ±30%
        (drawn once per clip, applied to every frame via HSV transform)
     3. Random rotation ±10°
        (BORDER_REFLECT fill avoids black corner artefacts)
+    4. Random erasing / cutout         (p=0.5, 2–20% of frame area)
+       Occludes a random patch (same box across all frames) to break
+       actor-identity shortcuts and force the model onto expression cues.
+       Reference: Zhong et al. (2020), "Random Erasing Data Augmentation".
 
 Key: __getitem__ returns dict with key "clip" (not "frames") to match
      the training loop convention used throughout train.py and
@@ -204,13 +208,62 @@ def _rotate_frames(frames: np.ndarray, max_angle: float = 10.0) -> np.ndarray:
     return rotated
 
 
+def _random_erase_frames(
+    frames:       np.ndarray,
+    p:            float = 0.5,
+    area_range:   tuple = (0.02, 0.20),
+    aspect_range: tuple = (0.3, 3.3),
+) -> np.ndarray:
+    """Random erasing / cutout — occlude one random rectangle in every frame.
+
+    The same rectangle (location + size) is erased from all T frames to keep
+    temporal consistency, and is filled with random RGB noise. This forces the
+    model to rely on distributed expression cues rather than memorising a fixed
+    region of a particular actor's face.
+
+    Reference: Zhong et al. (2020), "Random Erasing Data Augmentation".
+
+    Parameters
+    ----------
+    frames       : (T, H, W, 3) uint8 RGB
+    p            : probability of applying erasing (default 0.5)
+    area_range   : erased area as a fraction of the frame (default 2–20%)
+    aspect_range : aspect ratio range of the erased box (default 0.3–3.3)
+
+    Returns
+    -------
+    (T, H, W, 3) uint8 — with one patch erased (or unchanged with prob 1−p)
+    """
+    if random.random() > p:
+        return frames
+
+    _, H, W, _ = frames.shape
+    img_area = H * W
+
+    for _ in range(10):   # retry until a valid box fits inside the frame
+        target_area = random.uniform(*area_range) * img_area
+        aspect      = random.uniform(*aspect_range)
+        h = int(round((target_area * aspect) ** 0.5))
+        w = int(round((target_area / aspect) ** 0.5))
+        if 0 < h < H and 0 < w < W:
+            top  = random.randint(0, H - h)
+            left = random.randint(0, W - w)
+            frames = frames.copy()
+            noise  = np.random.randint(0, 256, size=(h, w, 3), dtype=np.uint8)
+            frames[:, top:top + h, left:left + w, :] = noise   # same box, all frames
+            return frames
+
+    return frames   # no valid box found in 10 tries — return unchanged
+
+
 def augment_clip(frames: np.ndarray) -> np.ndarray:
     """Apply full training augmentation pipeline to a single clip.
 
     Augmentation order (all operations applied identically to every frame):
         1. Random horizontal flip   (p=0.5)
-        2. Color jitter             (brightness, contrast, saturation ±20%)
+        2. Color jitter             (brightness, contrast, saturation ±30%)
         3. Random rotation          (±10°, BORDER_REFLECT fill)
+        4. Random erasing / cutout  (p=0.5, 2–20% of frame area)
 
     Parameters
     ----------
@@ -221,8 +274,9 @@ def augment_clip(frames: np.ndarray) -> np.ndarray:
     (T, H, W, 3) uint8 — augmented clip
     """
     frames = _flip_frames(frames)
-    frames = _color_jitter_frames(frames)
+    frames = _color_jitter_frames(frames, brightness=0.3, contrast=0.3, saturation=0.3)
     frames = _rotate_frames(frames)
+    frames = _random_erase_frames(frames)
     return frames
 
 
