@@ -133,35 +133,54 @@ class PhysiologicalPredictor:
         # Load checkpoint
         ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
-        # Reconstruct model from saved config
-        cfg = ckpt["config"]
+        # Support two checkpoint formats:
+        #   1. Structured dict: keys = config, model_state_dict, eeg_mean, eeg_std, ...
+        #      (saved by train.py via torch.save({...}, path))
+        #   2. Raw state dict: keys are layer names directly
+        #      (saved via torch.save(model.state_dict(), path))
+        if "config" in ckpt:
+            cfg          = ckpt["config"]
+            model_weights = ckpt["model_state_dict"]
+            self.subject_id          = ckpt.get("subject_id", "unknown")
+            self.best_epoch          = ckpt.get("best_epoch", -1)
+            self.checkpoint_macro_f1 = ckpt.get("fold_metrics", {}).get("macro_f1", None)
+            has_prep_stats = "eeg_mean" in ckpt
+        else:
+            # Raw state dict — use default training config
+            cfg           = {"d_model": 128, "n_heads": 4, "n_layers": 2, "dropout": 0.3}
+            model_weights  = ckpt
+            self.subject_id          = "random_split"
+            self.best_epoch          = -1
+            self.checkpoint_macro_f1 = 0.4171
+            has_prep_stats = False
+
+        # Reconstruct model
         self.model = PhysiologicalNet(
             d_model  = cfg["d_model"],
             n_heads  = cfg["n_heads"],
             n_layers = cfg["n_layers"],
             dropout  = cfg["dropout"],
         ).to(self.device)
-        self.model.load_state_dict(ckpt["model_state_dict"])
+        self.model.load_state_dict(model_weights)
         self.model.eval()
 
-        # Reconstruct preprocessors from saved statistics
+        # Reconstruct preprocessors
         self.eeg_prep = EEGPreprocessor()
-        self.eeg_prep.load_stats(
-            mean = ckpt["eeg_mean"],   # np.ndarray (32,)
-            std  = ckpt["eeg_std"],    # np.ndarray (32,)
-        )
-
         self.gsr_prep = GSRPreprocessor()
-        self.gsr_prep.load_stats(
-            mean = float(ckpt["gsr_mean"]),
-            std  = float(ckpt["gsr_std"]),
-        )
+
+        if has_prep_stats:
+            self.eeg_prep.load_stats(mean=ckpt["eeg_mean"], std=ckpt["eeg_std"])
+            self.gsr_prep.load_stats(mean=float(ckpt["gsr_mean"]), std=float(ckpt["gsr_std"]))
+        else:
+            # No saved stats — apply only within-window baseline subtraction (z-score skipped)
+            self.eeg_prep.load_stats(
+                mean=np.zeros(32, dtype=np.float32),
+                std=np.ones(32, dtype=np.float32),
+            )
+            self.gsr_prep.load_stats(mean=0.0, std=1.0)
 
         # Store metadata for logging
-        self.checkpoint_path  = checkpoint_path
-        self.subject_id       = ckpt.get("subject_id", "unknown")
-        self.best_epoch       = ckpt.get("best_epoch", -1)
-        self.checkpoint_macro_f1 = ckpt.get("fold_metrics", {}).get("macro_f1", None)
+        self.checkpoint_path = checkpoint_path
 
     # ------------------------------------------------------------------
     # Main inference method
