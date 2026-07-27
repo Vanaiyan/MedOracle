@@ -109,7 +109,9 @@ def map_deap_to_class(
     'sad'
     >>> map_deap_to_class(2.0, 7.0, 7.0)
     'angry'
-    >>> map_deap_to_class(4.5, 4.5, 4.5)   # boundary → positive side
+    >>> map_deap_to_class(5.0, 5.0, 5.0)   # boundary (>=5) → positive side
+    'happy'
+    >>> map_deap_to_class(6.0, 7.0, 3.0)   # high V+A, low D → happy (Russell 2D)
     'happy'
     """
     _validate_deap_range(valence,   "valence")
@@ -198,9 +200,9 @@ def map_cremad_to_class(label_str: str) -> Optional[str]:
     'stress'
     >>> map_cremad_to_class("NEU")
     'calm'
-    >>> map_cremad_to_class("DIS")   # dropped
+    >>> print(map_cremad_to_class("DIS"))   # dropped
     None
-    >>> map_cremad_to_class("dis")   # case-insensitive
+    >>> print(map_cremad_to_class("dis"))   # case-insensitive → also dropped
     None
     """
     normalised = label_str.strip().upper()

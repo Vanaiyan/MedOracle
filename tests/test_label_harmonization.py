@@ -87,9 +87,12 @@ class TestDeapBoundaryValues(unittest.TestCase):
         # V=5 (hi), A=5 (hi), D=5 (hi) → happy
         self.assertEqual(map_deap_to_class(5.0, 5.0, 5.0), "happy")
 
-    def test_v_hi_a_hi_d_lo_is_unclassifiable(self):
-        # V=5 (hi), A=5 (hi), D=4.9 (lo) → no canonical class
-        self.assertIsNone(map_deap_to_class(5.0, 5.0, 4.9))
+    def test_v_hi_a_hi_d_lo_is_happy(self):
+        # V=5 (hi), A=5 (hi), D=4.9 (lo) → happy
+        # Russell (1980) 2D rule: high valence + high arousal = happy,
+        # independent of dominance (Mehrabian's PAD axis). Recovers samples
+        # that were previously unclassified.
+        self.assertEqual(map_deap_to_class(5.0, 5.0, 4.9), "happy")
 
     def test_v_lo_a_hi_d_hi_is_angry(self):
         # V=4.9 (lo), A=5 (hi), D=5 (hi) → angry
@@ -119,11 +122,15 @@ class TestDeapBoundaryValues(unittest.TestCase):
 # ===========================================================================
 
 class TestDeapUnclassifiable(unittest.TestCase):
-    """Two cells in the 2×2×2 V/A/D cube have no canonical mapping."""
+    """One cell in the 2×2×2 V/A/D cube has no canonical mapping.
 
-    def test_v_hi_a_hi_d_lo_returns_none(self):
-        # excited but submissive — outside Russell (1980) 5-class model
-        self.assertIsNone(map_deap_to_class(7.0, 7.0, 2.0))
+    (V_hi, A_hi, D_lo now maps to happy via the Russell 2D rule; only
+    V_hi, A_lo, D_lo and V_lo, A_lo, D_hi remain unclassifiable.)
+    """
+
+    def test_v_hi_a_hi_d_lo_is_happy(self):
+        # excited but submissive — Russell 2D: high V + high A → happy
+        self.assertEqual(map_deap_to_class(7.0, 7.0, 2.0), "happy")
 
     def test_v_hi_a_lo_d_lo_returns_none(self):
         # relaxed but submissive — outside the 5-class model
@@ -174,7 +181,8 @@ class TestDeapToClassInt(unittest.TestCase):
         self.assertEqual(map_deap_to_class_int(3.0, 7.0, 2.0), 0)
 
     def test_unclassifiable_returns_none(self):
-        self.assertIsNone(map_deap_to_class_int(7.0, 7.0, 2.0))
+        # V_hi, A_lo, D_lo remains unclassifiable (V_hi,A_hi,D_lo now → happy)
+        self.assertIsNone(map_deap_to_class_int(7.0, 2.0, 2.0))
 
     def test_all_emotions_return_correct_index(self):
         cases = {
@@ -308,7 +316,7 @@ class TestBatchHelpers(unittest.TestCase):
         trials = [
             (7.0, 7.0, 7.0),  # happy
             (2.0, 2.0, 2.0),  # sad
-            (7.0, 7.0, 2.0),  # unclassifiable
+            (7.0, 2.0, 2.0),  # unclassifiable (V_hi, A_lo, D_lo)
         ]
         self.assertEqual(batch_map_deap(trials), ["happy", "sad", None])
 
