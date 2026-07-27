@@ -36,6 +36,10 @@ data/CREMA-D/VideoMP4/
 checkpoints/
 saved_models/
 
+# Exception — allow trained PhysiologicalNet checkpoint for team sharing
+!member1_physiological/checkpoints/
+!member1_physiological/checkpoints/random_split_best.pt
+
 # IDE
 .vscode/
 .idea/
