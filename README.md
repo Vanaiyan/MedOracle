@@ -44,7 +44,20 @@ FYP/
 ├── member1_physiological/           # Suhira — EEG + GSR module
 │   ├── preprocessing/
 │   ├── models/
-│   └── utils/
+│   ├── utils/
+│   ├── baseline/
+│   │   ├── baselineSVM.py           # SVM baseline (LOSO, 165 features)
+│   │   ├── baselineRF.py            # Random Forest baseline (LOSO, 165 features)
+│   │   └── baselineMLP.py           # MLP baseline (LOSO, 165 features)
+│   ├── checkpoints/
+│   │   ├── random_split_best.pt     # Random split model (F1: 0.4171)
+│   │   ├── model_soup_best.pt       # Model soup — 32-fold average (F1: 0.1791)
+│   │   └── loso/                    # All 32 LOSO fold checkpoints
+│   │       ├── fold_00_s01_best.pt
+│   │       └── ...fold_31_s32_best.pt
+│   ├── predict.py                   # Inference script — loads any checkpoint + DEAP .dat
+│   ├── model_soup.py                # Averages all 32 LOSO fold checkpoints into one model
+│   └── fix_checkpoint.py            # One-time: adds preprocessor stats to raw checkpoint
 │
 ├── member2_video_fusion/            # Vanaiyan — Video + fusion module
 │   ├── preprocessing/
@@ -397,8 +410,13 @@ pytest tests/ -v
 ## Git Workflow
 
 ```bash
-# Never commit datasets or model checkpoints
-# The .gitignore already excludes data/DEAP/*.dat, data/CREMA-D/raw/, *.pt, *.pth
+# Datasets are never committed — data/DEAP/ and data/CREMA-D/ are excluded in .gitignore
+
+# Member 1 trained model checkpoints ARE committed via .gitignore exceptions:
+#   member1_physiological/checkpoints/random_split_best.pt
+#   member1_physiological/checkpoints/model_soup_best.pt
+#   member1_physiological/checkpoints/loso/*.pt
+# All other *.pt files (outside member1_physiological/checkpoints/) are still excluded.
 
 # Suggested branching
 git checkout -b member1/deap-preprocessing   # Suhira
@@ -410,57 +428,118 @@ git checkout -b member3/shap-layer           # Adshaya
 
 ---
 
-## Member 1 — Accuracy Improvement Plan (July–August 2026)
+## Member 1 — Training Results (July 2026)
 
-### Current State
-- Evaluation: Leave-One-Subject-Out (LOSO) — 32 folds
-- Accuracy: ~32% | Macro-F1: ~0.17
-- Dataset: DEAP only (32 subjects)
-
-### Why Accuracy Is Currently Limited
-LOSO is the strictest possible evaluation — the model is tested on a completely unseen person
-it has never encountered during training. EEG signals are highly subject-specific (amplitude,
-baseline, noise patterns differ per person), so generalising to a brand new subject is
-inherently difficult. Additionally, DEAP's happy class is underrepresented because music video
-stimuli rarely elicit simultaneously high valence, high arousal, and high dominance ratings.
-These are known limitations of the DEAP benchmark reported in published literature.
+### Model: PhysiologicalNet (BiCrossModal Attention)
+- Architecture: EEGEncoder + GSREncoder + BidirectionalCrossModalAttention + ClassificationHead
+- Input: EEG (32 channels × 512 samples) + GSR (512 samples after resampling to 128 Hz)
+- Output: 5-class softmax (stress / calm / happy / sad / angry)
+- Dataset: DEAP (32 subjects × 40 trials × 15 windows = 19,200 windows)
 
 ---
 
-### Phase 1 — Random Split Evaluation (Target: 50–55% accuracy)
-**Why:** LOSO simulates zero-shot deployment on an unknown person. In real deployment,
-a short calibration session from the user is available — meaning the model has seen some
-data from that person before. Switching to an 80/20 random split across all subjects
-simulates this more realistic deployment scenario and is standard practice for demo systems.
+### Evaluation 1 — Random Split (80/20 stratified)
 
-**What changes:** Training evaluation method only. The output interface to the fusion layer
-(physiological_prediction_dict) remains completely unchanged.
+| Metric | Result |
+|--------|--------|
+| Macro-F1 | **0.4171** |
+| Accuracy | **~42%** |
+| Checkpoint | `checkpoints/random_split_best.pt` |
 
-**Timeline:** July 17–19, 2026
+**When to use:** Demo scenarios where the model has already seen data from the test subject
+(simulates a real-world calibration session). Gives higher accuracy and more varied predictions.
 
 ---
 
-### Phase 2 — AMIGOS Dataset Integration (Target: 55–65% accuracy)
-**Why:** More training subjects = better generalisation. DEAP has 32 subjects. AMIGOS
-(Queen Mary University, Mir et al. 2018) has 40 additional subjects with EEG + GSR recorded
-under the same VAD label scale (1–9). Combining both datasets increases training subjects
-from 32 to 72 — a 125% increase in subject diversity.
+### Evaluation 2 — LOSO (Leave-One-Subject-Out, 32 folds)
 
-**Challenge:** AMIGOS uses 14 EEG channels vs DEAP's 32. Solution: use only the 14 channels
-common to both datasets, reducing DEAP from 32 to 14 channels. The EEG encoder input
-dimension is updated accordingly.
+| Metric | Result |
+|--------|--------|
+| Mean Macro-F1 | **0.1791 ± 0.0411** |
+| Folds | 32 (one per DEAP subject) |
+| Checkpoints | `checkpoints/loso/fold_00_s01_best.pt` … `fold_31_s32_best.pt` |
 
-**What changes:** EEG encoder input (32ch → 14ch), dataset loader (DEAP + AMIGOS combined).
-Output interface to fusion layer remains unchanged.
+**Why LOSO is hard:** The model is tested on a completely unseen person each fold. EEG signals
+are highly subject-specific (amplitude, baseline, noise differ per person), so cross-subject
+generalisation is inherently difficult. This is a known limitation of the DEAP benchmark.
 
-**Timeline:** July 20–27, 2026
+---
+
+### Evaluation 3 — Model Soup (Wortsman et al. 2022)
+
+| Metric | Result |
+|--------|--------|
+| Method | F1-weighted average of all 32 LOSO fold checkpoints |
+| Mean Macro-F1 | **0.1791** |
+| Checkpoint | `checkpoints/model_soup_best.pt` |
+
+The model soup combines knowledge from all 32 subjects into a single deployable model.
+Better folds contribute more weight; the averaged preprocessor stats represent all subjects.
+
+**Run:**
+```bash
+python -m member1_physiological.model_soup \
+    --checkpoint_dir member1_physiological/checkpoints/loso \
+    --output member1_physiological/checkpoints/model_soup_best.pt
+```
+
+---
+
+### Baseline Comparison (all under LOSO protocol, 165 features)
+
+| Model | Accuracy | Macro-F1 |
+|-------|----------|----------|
+| SVM (RBF kernel) | 16.48% | 0.0975 |
+| Random Forest (100 trees) | 24.13% | 0.1171 |
+| MLP (2-layer) | pending | pending |
+| **PhysiologicalNet (LOSO)** | ~32% | **0.1791** |
+| PhysiologicalNet (random split) | ~42% | **0.4171** |
+
+Features for baselines: 160 EEG features (32 channels × 5 frequency bands: delta/theta/alpha/beta/gamma) + 5 GSR statistical features = 165 total.
+
+**Run baselines:**
+```bash
+python -m member1_physiological.baseline.baselineSVM
+python -m member1_physiological.baseline.baselineRF
+python -m member1_physiological.baseline.baselineMLP
+```
+
+---
+
+### Running Inference with predict.py
+
+```bash
+# Using model soup (recommended for demo)
+python -m member1_physiological.predict \
+    --checkpoint member1_physiological/checkpoints/model_soup_best.pt \
+    --dat_file data/DEAP/data_preprocessed_python/s01.dat \
+    --trial 0 --window 0
+
+# Using random split model
+python -m member1_physiological.predict \
+    --checkpoint member1_physiological/checkpoints/random_split_best.pt \
+    --dat_file data/DEAP/data_preprocessed_python/s01.dat \
+    --trial 0 --window 0
+```
+
+Output format (`physiological_prediction_dict`):
+```python
+{
+    "predicted_emotion": "stress",
+    "confidence": 0.74,
+    "class_probabilities": {
+        "stress": 0.74, "calm": 0.08, "happy": 0.06, "sad": 0.07, "angry": 0.05
+    },
+    "signal_quality": {"eeg": "good", "gsr": "good"}
+}
+```
 
 ---
 
 ### Phase 3 — Integration and Demo Preparation (August 1–3)
 - End-to-end integration with Member 2 (fusion) and Member 3 (SHAP + web app)
-- Demo scenario preparation: stress, calm, sad, angry samples
-- Final evaluation report
+- Demo input: DEAP `.dat` files for EEG + GSR; video from DEAP face video (s01–s22) or CREMA-D matched by emotion label
+- Share `model_soup_best.pt` with Vanaiyan for fusion integration
 
 ---
 
