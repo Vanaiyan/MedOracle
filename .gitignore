@@ -67,3 +67,7 @@ data/CREMA-D/
 
 *.zip
 data/CREMA-D/
+
+# Synchronised cross-dataset samples (DEAP+CREMA-D derived — do not redistribute)
+data/synced_samples/
+member1_physiological/samples/*.npz

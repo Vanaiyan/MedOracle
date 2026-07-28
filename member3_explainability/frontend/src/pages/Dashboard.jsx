@@ -89,6 +89,8 @@ export default function Dashboard() {
   const [demoEmotion, setDemoEmotion] = useState('stress');
   const [showDemoPanel, setShowDemoPanel] = useState(false);
   const [videoFile, setVideoFile] = useState(null);
+  const [eegFile, setEegFile] = useState(null);   // EEG .npy/.csv (32,512)
+  const [gsrFile, setGsrFile] = useState(null);   // GSR .npy/.csv (512,)
   const [videoError, setVideoError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
@@ -145,6 +147,31 @@ export default function Dashboard() {
       loadSummary();
     } catch (e) {
       setVideoError(e.response?.data?.detail || 'Video prediction failed. Check the file and try again.');
+    } finally {
+      setRunningPrediction(false);
+    }
+  };
+
+  // Real MULTIMODAL fusion: uploaded video + EEG + GSR files.
+  // Runs both models (M1 physio + M2 video) and fuses them via the gated fusion.
+  const runMultimodalPrediction = async () => {
+    if (!videoFile || !eegFile || !gsrFile) return;
+    setVideoError(null);
+    setRunningPrediction(true);
+    try {
+      const { data } = await predictAPI.predictMultimodal(videoFile, eegFile, gsrFile);
+      setLastResult(data);
+      setActiveSessionId(data.session_id);
+      setVideoFile(null); setEegFile(null); setGsrFile(null);
+      try {
+        const chatResp = await chatAPI.send(data.session_id, 'Please explain these results for me.');
+        setAutoExplanation(chatResp.data.response);
+      } catch {
+        setAutoExplanation('Multimodal analysis complete. Ask me any questions about this result.');
+      }
+      loadSummary();
+    } catch (e) {
+      setVideoError(e.response?.data?.detail || 'Multimodal prediction failed. Check the file and try again.');
     } finally {
       setRunningPrediction(false);
     }
@@ -323,15 +350,55 @@ export default function Dashboard() {
               <p className="error-msg" style={{ marginTop: '0.6rem' }}>⚠ {videoError}</p>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+            {/* Physiological uploads (EEG + GSR) for real multimodal fusion */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.8rem', marginTop: '0.9rem' }}>
+              <label style={{ flex: 1, minWidth: 180, fontSize: '0.82rem', color: '#475569' }}>
+                <span title="EEG window file — shape (32, 512), .npy or .csv">🧠 EEG file (.npy)</span>
+                <input
+                  type="file" accept=".npy,.csv,.txt"
+                  disabled={runningPrediction}
+                  onChange={e => setEegFile(e.target.files[0] || null)}
+                  style={{ display: 'block', marginTop: 4, fontSize: '0.8rem' }}
+                />
+                {eegFile && <span style={{ color: '#16a34a' }}>✓ {eegFile.name}</span>}
+              </label>
+              <label style={{ flex: 1, minWidth: 180, fontSize: '0.82rem', color: '#475569' }}>
+                <span title="GSR window file — shape (512,), .npy or .csv">💧 GSR file (.npy)</span>
+                <input
+                  type="file" accept=".npy,.csv,.txt"
+                  disabled={runningPrediction}
+                  onChange={e => setGsrFile(e.target.files[0] || null)}
+                  style={{ display: 'block', marginTop: 4, fontSize: '0.8rem' }}
+                />
+                {gsrFile && <span style={{ color: '#16a34a' }}>✓ {gsrFile.name}</span>}
+              </label>
+            </div>
+            <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.4rem' }}>
+              Tip: ready-made subjects (video + eeg.npy + gsr.npy) are in <code>data/synced_samples/</code>.
+            </p>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap',
+                          justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.8rem' }}>
               <button
-                className="btn btn-primary"
+                className="btn"
                 onClick={runVideoPrediction}
                 disabled={!videoFile || runningPrediction}
+                title="Video only (no physiological input → graceful degradation)"
               >
                 {runningPrediction
                   ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Analysing…</>
-                  : '▶ Run Emotion Analysis'}
+                  : '▶ Video only'}
+              </button>
+
+              <button
+                className="btn btn-primary"
+                onClick={runMultimodalPrediction}
+                disabled={!videoFile || !eegFile || !gsrFile || runningPrediction}
+                title="Fuse video + EEG + GSR (real gated multimodal fusion)"
+              >
+                {runningPrediction
+                  ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Fusing…</>
+                  : '▶ Run Multimodal Fusion'}
               </button>
             </div>
           </div>

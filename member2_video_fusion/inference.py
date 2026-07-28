@@ -227,62 +227,59 @@ def _process_video(video_path: Path) -> Tuple[Optional[np.ndarray], str]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def predict_video(video_path: str | Path) -> dict:
+def predict_video_frames(frames: np.ndarray) -> dict:
     """
-    Run full video inference on a raw video file.
+    Run the video model on already-extracted (T, 224, 224, 3) uint8 RGB frames.
 
-    Operates in video-only mode (physio missing → graceful degradation):
-      - modality_weights = {"physio": 0.0, "video": 1.0}
-      - signal_quality.eeg / .gsr = "poor"
+    Returns the **video per-modality prediction** only:
+        {"predicted_emotion": str, "confidence": float, "class_probabilities": dict}
+    Use this for pre-extracted clips (e.g. a SynchronizedInput or the ablation
+    study); the caller supplies the video_quality grade separately to fusion.
+    """
+    tensor = normalise_and_to_tensor(frames)          # (T, 3, 224, 224)
+    model, device = _load_model()
+    return model.predict_clip(tensor, device=device)
 
-    Parameters
-    ----------
-    video_path : path to any video file readable by OpenCV
+
+def predict_video_modality(video_path: str | Path) -> tuple[dict, str]:
+    """
+    Decode a raw video file → video per-modality prediction + quality grade.
 
     Returns
     -------
-    dict : prediction_output matching the M2 → M3 interface contract
+    (video_pred, video_quality) where
+        video_pred    = {"predicted_emotion", "confidence", "class_probabilities"}
+        video_quality = "good" | "degraded" | "poor"
+
+    This is the reusable building block that both `predict_video()` (video-only)
+    and `pipeline.run_full_pipeline()` (fusion) share.
     """
     video_path = Path(video_path)
-
-    # 1. Decode + uniform sampling + YOLO face-crop (matches training)
-    frames, video_quality = _process_video(video_path)
+    frames, video_quality = _process_video(video_path)   # decode + sample + quality
     if frames is None:
         raise ValueError(
             f"Could not extract {N_FRAMES} frames from {video_path.name}. "
             "The file may be too short, corrupt, or an unsupported format."
         )
+    return predict_video_frames(frames), video_quality
 
-    # 2. ImageNet normalise → (T, 3, 224, 224) tensor
-    tensor = normalise_and_to_tensor(frames)
 
-    # 3. Model inference
-    model, device = _load_model()
-    video_pred = model.predict_clip(tensor, device=device)
-    # video_pred = {"predicted_emotion": str, "confidence": float, "class_probabilities": dict}
+def predict_video(video_path: str | Path) -> dict:
+    """
+    Run full video inference on a raw video file (video-only mode).
 
-    # 4. Graceful degradation: physio missing → video weight = 1.0
-    uniform_probs = {e: 1.0 / _K for e in video_pred["class_probabilities"]}
+    Physio is absent → the canonical gated fusion degrades gracefully to
+    modality_weights = {"physio": 0.0, "video": 1.0}, with eeg/gsr quality "poor".
 
-    return {
-        "predicted_emotion":   video_pred["predicted_emotion"],
-        "confidence":          video_pred["confidence"],
-        "class_probabilities": video_pred["class_probabilities"],
-        "modality_weights":    {"physio": 0.0, "video": 1.0},
-        "signal_quality": {
-            "eeg":   "poor",       # not provided
-            "gsr":   "poor",       # not provided
-            "video": video_quality,
-        },
-        "per_modality_predictions": {
-            "physio": {
-                "predicted_emotion":   "calm",   # placeholder — physio absent
-                "confidence":          0.0,
-                "class_probabilities": uniform_probs,
-            },
-            "video": video_pred,
-        },
-    }
+    Returns
+    -------
+    dict : prediction_output matching the M2 → M3 interface contract.
+    """
+    video_pred, video_quality = predict_video_modality(video_path)
+    # Route through the canonical fusion so video-only uses the same code path.
+    from member2_video_fusion.fusion import gated_fusion
+    return gated_fusion(physio_pred=None, video_pred=video_pred,
+                        video_quality=video_quality)
 
 
 # ---------------------------------------------------------------------------

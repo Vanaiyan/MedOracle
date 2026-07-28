@@ -9,12 +9,15 @@ Author : Adshaya Balarajah (214024V)
 
 from __future__ import annotations
 
+import io
 import uuid
 import tempfile
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +37,50 @@ from member3_explainability.shap.synthetic_data import generate_prediction_outpu
 _ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".webm"}
 
 router = APIRouter(tags=["Prediction"])
+
+
+async def _persist_and_respond(
+    prediction_output: dict, user_id: str, db: AsyncSession
+) -> "PredictResponse":
+    """Run SHAP on a prediction_output, store the session + SHAP log, return the
+    response. Shared by the fusion endpoints (currently /predict/multimodal)."""
+    shap_output = build_shap_output(prediction_output)
+
+    session_id = str(uuid.uuid4())
+    db.add(Session(
+        session_id=session_id,
+        user_id=user_id,
+        timestamp=datetime.utcnow(),
+        predicted_emotion=shap_output["predicted_emotion"],
+        confidence=shap_output["confidence"],
+        modality_weights=shap_output["modality_weights"],
+        signal_quality=shap_output["signal_quality"],
+        class_probabilities=shap_output["class_probabilities"],
+    ))
+    await db.flush()
+
+    db.add(SHAPLog(
+        session_id=session_id,
+        shap_values=shap_output["shap_values"],
+        feature_importance=shap_output["feature_importance"],
+        faithfulness_score=shap_output["faithfulness_score"],
+        signal_reliability=shap_output["signal_reliability"],
+        coalition_values=shap_output.get("coalition_values"),
+        per_modality_predictions=shap_output.get("per_modality_predictions"),
+    ))
+
+    return PredictResponse(
+        session_id=session_id,
+        predicted_emotion=shap_output["predicted_emotion"],
+        confidence=shap_output["confidence"],
+        class_probabilities=shap_output["class_probabilities"],
+        modality_weights=shap_output["modality_weights"],
+        signal_quality=shap_output["signal_quality"],
+        shap_values=SHAPValuesOut(**shap_output["shap_values"]),
+        feature_importance=SHAPValuesOut(**shap_output["feature_importance"]),
+        faithfulness_score=shap_output["faithfulness_score"],
+        coalition_values=shap_output.get("coalition_values", {}),
+    )
 
 
 @router.post("/predict", response_model=PredictResponse)
@@ -257,6 +304,95 @@ async def predict_from_video(
         faithfulness_score=shap_output["faithfulness_score"],
         coalition_values=shap_output.get("coalition_values", {}),
     )
+
+
+def _load_signal(upload: UploadFile, expected_shape: tuple) -> np.ndarray:
+    """Parse an uploaded EEG/GSR file (.npy or .csv) into a float32 array.
+
+    Raises HTTP 422 if the file is unreadable or has the wrong shape.
+    """
+    raw = upload.file.read()
+    name = (upload.filename or "").lower()
+    try:
+        if name.endswith((".csv", ".txt")):
+            arr = np.loadtxt(io.StringIO(raw.decode("utf-8")), delimiter=",")
+        else:  # .npy (default)
+            arr = np.load(io.BytesIO(raw), allow_pickle=False)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Could not read '{upload.filename}' as .npy or .csv ({exc}).",
+        )
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.shape != expected_shape:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"'{upload.filename}' must have shape {expected_shape}, got {arr.shape}.",
+        )
+    return arr
+
+
+@router.post("/predict/multimodal", response_model=PredictResponse)
+async def predict_multimodal(
+    file: UploadFile = File(..., description="Video clip (required)"),
+    eeg:  Optional[UploadFile] = File(None, description="EEG window .npy/.csv, shape (32,512)"),
+    gsr:  Optional[UploadFile] = File(None, description="GSR window .npy/.csv, shape (512,)"),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Real multimodal inference: the user uploads a **video** plus (optionally) an
+    **EEG** and **GSR** window. Both models run (M1 physio + M2 video), the gated
+    fusion combines them, then the fused prediction goes through SHAP + is stored.
+
+    - Provide all three files → full multimodal fusion.
+    - Provide only the video (omit eeg/gsr) → video-only (graceful degradation).
+    - EEG must be shape (32, 512); GSR shape (512,); both .npy or .csv.
+    (See data/synced_samples/ for ready-made subject_XX/{eeg.npy, gsr.npy, video}.)
+    """
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in _ALLOWED_VIDEO_SUFFIXES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported video type '{suffix}'. Allowed: {sorted(_ALLOWED_VIDEO_SUFFIXES)}",
+        )
+
+    # Parse physio uploads (both or neither)
+    if (eeg is None) != (gsr is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide BOTH eeg and gsr files, or neither (video-only).",
+        )
+    eeg_arr = _load_signal(eeg, (32, 512)) if eeg is not None else None
+    gsr_arr = _load_signal(gsr, (512,))    if gsr is not None else None
+
+    # Write the video upload to a temp file for OpenCV
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = Path(tmp.name)
+
+    try:
+        try:
+            from member2_video_fusion.pipeline import run_full_pipeline
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=("Multimodal inference unavailable: Member 2's stack is not "
+                        f"installed ({exc})."),
+            )
+        prediction_output = run_full_pipeline(
+            eeg=eeg_arr, gsr=gsr_arr, video_path=tmp_path
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Fusion inference failed: {exc}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return await _persist_and_respond(prediction_output, user_id, db)
 
 
 @router.get("/explain/{session_id}", response_model=ExplainResponse)

@@ -80,6 +80,15 @@ export const predictAPI = {
     form.append('file', file);
     return api.post('/predict/video', form, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
+  // Real multimodal fusion: upload video + (optional) EEG + GSR files
+  predictMultimodal: (videoFile, eegFile, gsrFile) => {
+    const form = new FormData();
+    form.append('file', videoFile);
+    if (eegFile) form.append('eeg', eegFile);
+    if (gsrFile) form.append('gsr', gsrFile);
+    return api.post('/predict/multimodal', form,
+      { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
   explain:          (session_id) => api.get(`/explain/${session_id}`),
 };
 

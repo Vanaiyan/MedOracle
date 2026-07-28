@@ -169,8 +169,10 @@ async def _call_deepseek(messages: List[dict], system: str) -> str:
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY not set")
 
+    model = "deepseek/deepseek-chat"
+    logger.info("Using AI model: OpenRouter/DeepSeek (%s)", model)
     payload = {
-        "model": "deepseek/deepseek-chat",
+        "model": model,
         "messages": [{"role": "system", "content": system}, *messages],
         "temperature": 0.4,
         "max_tokens": 512,
@@ -194,6 +196,7 @@ async def _call_groq(messages: List[dict], system: str) -> str:
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not set")
     model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    logger.info("Using AI model: Groq (%s)", model)
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": system}, *messages],
@@ -219,6 +222,7 @@ async def _call_gemini(messages: List[dict], system: str) -> str:
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set")
     model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    logger.info("Using AI model: Google Gemini (%s)", model)
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{model}:generateContent?key={api_key}"
@@ -232,7 +236,10 @@ async def _call_gemini(messages: List[dict], system: str) -> str:
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": contents,
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 700},
+        # gemini-3.5-flash is a "thinking" model: reasoning tokens count against
+        # maxOutputTokens, so keep the budget high enough that the visible answer
+        # isn't truncated after the model finishes thinking.
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048},
     }
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, json=payload)
@@ -480,11 +487,14 @@ async def get_llm_response(
     # ── 3. Try live LLMs: Groq, then Gemini, then OpenRouter/DeepSeek ──────
     for caller in (_call_groq, _call_gemini, _call_deepseek):
         try:
-            return await caller(messages, system)
+            reply = await caller(messages, system)
+            logger.info("AI response served by %s", caller.__name__)
+            return reply
         except Exception as exc:
             logger.warning("%s failed (%s: %s)", caller.__name__, type(exc).__name__, exc)
 
     # ── 4. Simulated fallback (no API key / all providers failed) ──────────
+    logger.info("Using AI model: simulated offline fallback (no live LLM available)")
     return _simulated_response(shap_output, user_message)
 
 
