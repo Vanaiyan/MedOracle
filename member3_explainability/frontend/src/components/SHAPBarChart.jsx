@@ -8,10 +8,11 @@ import {
   CartesianGrid, Tooltip, Cell, ReferenceLine,
 } from 'recharts';
 
+// Organic palette: EEG=sage-400, GSR=terracotta-400, Video=sage-700
 const FEATURE_COLORS = {
-  EEG:   '#63b3ed',
-  GSR:   '#b794f4',
-  video: '#68d391',
+  EEG:   '#aebf92',
+  GSR:   '#f6a06b',
+  video: '#56633f',
 };
 
 const FEATURE_LABELS = {
@@ -25,11 +26,12 @@ function CustomTooltip({ active, payload }) {
   const d = payload[0];
   return (
     <div style={{
-      background: 'rgba(10,13,22,0.95)',
-      border: '1px solid rgba(255,255,255,0.1)',
-      borderRadius: 10,
+      background: 'var(--color-surface)',
+      border: '1px solid var(--color-divider)',
+      borderRadius: 12,
       padding: '0.75rem 1rem',
       fontSize: 13,
+      boxShadow: 'var(--shadow-md)',
     }}>
       <div style={{ color: d.fill, fontWeight: 700, marginBottom: 4 }}>{FEATURE_LABELS[d.payload.feature]}</div>
       <div style={{ color: 'var(--text-secondary)' }}>
@@ -50,8 +52,8 @@ export default function SHAPBarChart({ shapValues, featureImportance, faithfulne
   if (!shapValues) {
     return (
       <div className="card">
-        <p className="card-title">SHAP Modality Contributions</p>
-        <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+        <h6 style={{ margin: 0 }}>SHAP modality contributions</h6>
+        <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-neutral-600)', fontSize: 14 }}>
           Select a session to view SHAP explanations.
         </div>
       </div>
@@ -65,17 +67,17 @@ export default function SHAPBarChart({ shapValues, featureImportance, faithfulne
     importance: featureImportance?.[feature] ?? Math.abs(value),
   }));
 
-  const faithColor = faithfulness >= 0.7 ? 'var(--accent-green)'
-    : faithfulness >= 0.4 ? 'var(--accent-orange)' : 'var(--accent-red)';
+  const faithColor = faithfulness >= 0.7 ? 'var(--color-accent-2-700)'
+    : faithfulness >= 0.4 ? 'var(--color-accent-600)' : 'var(--color-accent-800)';
 
   return (
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-        <p className="card-title" style={{ margin: 0 }}>SHAP Modality Contributions</p>
+        <h6 style={{ margin: 0 }}>SHAP modality contributions</h6>
         {faithfulness != null && (
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>Faithfulness</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: faithColor }}>
+            <div style={{ fontSize: 11, color: 'var(--color-neutral-600)', marginBottom: 3 }}>Faithfulness</div>
+            <div style={{ fontFamily: 'var(--font-heading)', fontSize: 18, color: faithColor }}>
               {(faithfulness * 100).toFixed(0)}%
             </div>
             <div className="faithfulness-bar" style={{ width: 80 }}>
@@ -91,19 +93,19 @@ export default function SHAPBarChart({ shapValues, featureImportance, faithfulne
       <div className="chart-container" style={{ height: 200 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+            <CartesianGrid strokeDasharray="3 4" stroke="var(--color-divider)" vertical={false} />
             <XAxis
               dataKey="label"
-              tick={{ fill: '#8892a4', fontSize: 12 }}
+              tick={{ fill: '#82796a', fontSize: 12 }}
               axisLine={false} tickLine={false}
             />
             <YAxis
-              tick={{ fill: '#8892a4', fontSize: 11 }}
+              tick={{ fill: '#82796a', fontSize: 11 }}
               axisLine={false} tickLine={false}
               tickFormatter={v => v.toFixed(2)}
             />
-            <Tooltip content={<CustomTooltip />} />
-            <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" />
+            <Tooltip content={<CustomTooltip />} cursor={{ fill: 'var(--color-neutral-200)' }} />
+            <ReferenceLine y={0} stroke="var(--color-neutral-400)" />
             <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={60}>
               {data.map((entry) => (
                 <Cell key={entry.feature} fill={FEATURE_COLORS[entry.feature]} fillOpacity={0.85} />

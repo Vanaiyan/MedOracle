@@ -221,7 +221,7 @@ export default function Dashboard() {
     : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
       <NavBar />
 
       <div className="dashboard-layout">
@@ -229,65 +229,57 @@ export default function Dashboard() {
         <div className="dashboard-main">
 
           {/* Top bar */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 16 }}>
             <div>
-              <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>Emotion Analysis Dashboard</h2>
-              <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>
-                Multimodal Emotion Recognition · SHAP Explainability
+              <h1 style={{ fontSize: 34, margin: '0 0 6px' }}>Emotion Analysis Dashboard</h1>
+              <p style={{ margin: 0, fontSize: 14.5, color: 'var(--color-neutral-700)' }}>
+                Multimodal emotion recognition · SHAP explainability
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               {/* Demo emotion picker */}
               <select
                 id="demo-emotion-select"
+                className="input"
                 value={demoEmotion}
                 onChange={e => setDemoEmotion(e.target.value)}
-                style={{
-                  background: '#060404f4', border: '1px solid var(--border)',
-                  color: 'var(--text-primary)', padding: '0.5rem 0.75rem',
-                  borderRadius: 8, fontFamily: 'var(--font)', fontSize: 13, cursor: 'pointer',
-                }}
+                style={{ width: 'auto', minWidth: 130, cursor: 'pointer' }}
               >
                 {EMOTIONS.map(e => (
-                  <option key={e} value={e} style={{ background: '#060404f4', color: '#ffffff' }}>
+                  <option key={e} value={e}>
                     {e.charAt(0).toUpperCase() + e.slice(1)}
                   </option>
                 ))}
               </select>
               <button
                 id="run-prediction-btn"
-                className="btn btn-primary"
+                className="btn btn-secondary"
                 onClick={runDemoPrediction}
                 disabled={runningPrediction}
               >
-                {runningPrediction ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Running…</> : '▶ Run Prediction'}
+                {runningPrediction
+                  ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Running…</>
+                  : <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round"><polygon points="6 3 20 12 6 21 6 3" /></svg>
+                    Run prediction
+                  </>}
               </button>
               <button
                 id="run-conflict-btn"
-                className="btn"
-                style={{
-                  background: 'linear-gradient(135deg, #f6ad55 0%, #ed8936 50%, #dd6b20 100%)',
-                  border: '1px solid #dd6b20',
-                  color: '#ffffff',
-                  fontWeight: 600,
-                }}
+                className="btn btn-primary"
                 onClick={runConflictPrediction}
                 disabled={runningPrediction}
                 title="Generate a session where physiology and video disagree"
               >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <svg width="12" height="14" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true">
-                    <path d="M13 2 L3 14 h7 l-1 8 L21 10 h-7 z" />
-                  </svg>
-                  New conflict session
-                </span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+                New conflict session
               </button>
             </div>
           </div>
 
           {/* Video upload panel */}
-          <div className="card" style={{ marginTop: '1rem' }}>
-            <p className="card-title">Analyse Video</p>
+          <section className="card" style={{ gap: 18 }}>
+            <h6 style={{ margin: 0 }}>Analyse video</h6>
 
             <input
               ref={fileInputRef}
@@ -339,7 +331,9 @@ export default function Dashboard() {
                 </>
               ) : (
                 <>
-                  <span className="drop-zone-icon">📹</span>
+                  <div className="drop-zone-icon-wrap">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-700)" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round"><path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="3" /></svg>
+                  </div>
                   <p className="drop-zone-title">Drop a video here or click to browse</p>
                   <p className="drop-zone-sub">Supports MP4 · MOV · AVI · MKV · FLV · WebM</p>
                 </>
@@ -351,43 +345,46 @@ export default function Dashboard() {
             )}
 
             {/* Physiological uploads (EEG + GSR) for real multimodal fusion */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.8rem', marginTop: '0.9rem' }}>
-              <label style={{ flex: 1, minWidth: 180, fontSize: '0.82rem', color: '#475569' }}>
-                <span title="EEG window file — shape (32, 512), .npy or .csv">🧠 EEG file (.npy)</span>
-                <input
-                  type="file" accept=".npy,.csv,.txt"
-                  disabled={runningPrediction}
-                  onChange={e => setEegFile(e.target.files[0] || null)}
-                  style={{ display: 'block', marginTop: 4, fontSize: '0.8rem' }}
-                />
-                {eegFile && <span style={{ color: '#16a34a' }}>✓ {eegFile.name}</span>}
-              </label>
-              <label style={{ flex: 1, minWidth: 180, fontSize: '0.82rem', color: '#475569' }}>
-                <span title="GSR window file — shape (512,), .npy or .csv">💧 GSR file (.npy)</span>
-                <input
-                  type="file" accept=".npy,.csv,.txt"
-                  disabled={runningPrediction}
-                  onChange={e => setGsrFile(e.target.files[0] || null)}
-                  style={{ display: 'block', marginTop: 4, fontSize: '0.8rem' }}
-                />
-                {gsrFile && <span style={{ color: '#16a34a' }}>✓ {gsrFile.name}</span>}
-              </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+              <div className="field">
+                <label title="EEG window file — shape (32, 512), .npy or .csv">EEG file (.npy)</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <input
+                    type="file" accept=".npy,.csv,.txt"
+                    disabled={runningPrediction}
+                    onChange={e => setEegFile(e.target.files[0] || null)}
+                    style={{ fontSize: '0.8rem' }}
+                  />
+                  {eegFile && <span style={{ fontSize: 13, color: 'var(--color-accent-2-700)' }}>✓ {eegFile.name}</span>}
+                </div>
+              </div>
+              <div className="field">
+                <label title="GSR window file — shape (512,), .npy or .csv">GSR file (.npy)</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <input
+                    type="file" accept=".npy,.csv,.txt"
+                    disabled={runningPrediction}
+                    onChange={e => setGsrFile(e.target.files[0] || null)}
+                    style={{ fontSize: '0.8rem' }}
+                  />
+                  {gsrFile && <span style={{ fontSize: 13, color: 'var(--color-accent-2-700)' }}>✓ {gsrFile.name}</span>}
+                </div>
+              </div>
             </div>
-            <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.4rem' }}>
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--color-neutral-600)' }}>
               Tip: ready-made subjects (video + eeg.npy + gsr.npy) are in <code>data/synced_samples/</code>.
             </p>
 
-            <div style={{ display: 'flex', flexWrap: 'wrap',
-                          justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.8rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10 }}>
               <button
-                className="btn"
+                className="btn btn-secondary"
                 onClick={runVideoPrediction}
                 disabled={!videoFile || runningPrediction}
                 title="Video only (no physiological input → graceful degradation)"
               >
                 {runningPrediction
                   ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Analysing…</>
-                  : '▶ Video only'}
+                  : 'Video only'}
               </button>
 
               <button
@@ -398,10 +395,10 @@ export default function Dashboard() {
               >
                 {runningPrediction
                   ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Fusing…</>
-                  : '▶ Run Multimodal Fusion'}
+                  : 'Run multimodal fusion'}
               </button>
             </div>
-          </div>
+          </section>
 
           {/* Stat cards */}
           <StatCards summary={sessionStats ?? summary} />
@@ -417,27 +414,27 @@ export default function Dashboard() {
           </div>
 
           {/* Modality-Conflict Explanation (Member 3 novel contribution) */}
-          <div style={{ marginTop: '1rem' }}>
-            <ConflictExplanationPanel sessionId={activeSessionId} />
-          </div>
+          <ConflictExplanationPanel sessionId={activeSessionId} />
 
           {/* Session detail card */}
           {sessionDetail && (
-            <div className="card animate-fadeinup">
-              <p className="card-title">Session Detail</p>
-              <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
+            <section className="card animate-fadeinup" style={{ gap: 16 }}>
+              <h6 style={{ margin: 0 }}>Session detail</h6>
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 32, alignItems: 'start' }}>
                 <div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Predicted Emotion</div>
-                  <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2 }}>
-                    {sessionDetail.predicted_emotion?.charAt(0).toUpperCase() + sessionDetail.predicted_emotion?.slice(1)}
-                    <span className={`badge badge-${sessionDetail.predicted_emotion}`} style={{ marginLeft: 8, fontSize: 11 }}>
+                  <div style={{ fontSize: 12, color: 'var(--color-neutral-600)', marginBottom: 6 }}>Predicted emotion</div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                    <span style={{ fontFamily: 'var(--font-heading)', fontSize: 28 }}>
+                      {sessionDetail.predicted_emotion?.charAt(0).toUpperCase() + sessionDetail.predicted_emotion?.slice(1)}
+                    </span>
+                    <span className={`badge badge-${sessionDetail.predicted_emotion}`}>
                       {(sessionDetail.confidence * 100).toFixed(1)}%
                     </span>
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Modality Weights</div>
-                  <div style={{ fontSize: 13, marginTop: 4, color: 'var(--text-primary)' }}>
+                  <div style={{ fontSize: 12, color: 'var(--color-neutral-600)', marginBottom: 6 }}>Modality weights</div>
+                  <div style={{ fontSize: 14 }}>
                     {(() => {
                       const sq = sessionDetail.signal_quality || {};
                       const qw = { good: 1.0, degraded: 0.5, poor: 0.1 };
@@ -449,20 +446,16 @@ export default function Dashboard() {
                       const gsrW = (physio * (wGSR / total) * 100).toFixed(0);
                       const vidW = ((sessionDetail.modality_weights?.video ?? 0) * 100).toFixed(0);
                       return <>
-                        EEG <strong>{eegW}%</strong>
-                        {' · '}
-                        GSR <strong>{gsrW}%</strong>
-                        {' · '}
-                        Video <strong>{vidW}%</strong>
+                        EEG <strong>{eegW}%</strong>{' · '}GSR <strong>{gsrW}%</strong>{' · '}Video <strong>{vidW}%</strong>
                       </>;
                     })()}
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Signal Quality</div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <div style={{ fontSize: 12, color: 'var(--color-neutral-600)', marginBottom: 6 }}>Signal quality</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {Object.entries(sessionDetail.signal_quality || {}).map(([k, v]) => (
-                      <span key={k} className={`badge badge-${v}`} style={{ fontSize: 10 }}>
+                      <span key={k} className={`tag ${v === 'good' ? 'tag-accent-2' : 'tag-outline'}`}>
                         {k.toUpperCase()} · {v}
                       </span>
                     ))}
@@ -471,35 +464,28 @@ export default function Dashboard() {
               </div>
 
               {/* Class probabilities */}
-              <div style={{ marginTop: '1rem' }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>Class Probabilities</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-neutral-600)', marginBottom: 10 }}>Class probabilities</div>
+                <div className="prob-grid">
                   {Object.entries(sessionDetail.class_probabilities || {}).map(([emotion, prob]) => (
-                    <div key={emotion} style={{
-                      background: 'rgba(255,255,255,0.04)',
-                      borderRadius: 8, padding: '0.5rem 0.75rem',
-                      border: `1px solid ${emotion === sessionDetail.predicted_emotion ? 'var(--accent-blue)' : 'var(--border)'}`,
-                      minWidth: 80, textAlign: 'center',
-                    }}>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{emotion}</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{(prob * 100).toFixed(1)}%</div>
+                    <div key={emotion} className={`prob-cell${emotion === sessionDetail.predicted_emotion ? ' active' : ''}`}>
+                      <div className="prob-cell-label">{emotion}</div>
+                      <div className="prob-cell-value">{(prob * 100).toFixed(1)}%</div>
                     </div>
                   ))}
                 </div>
               </div>
-            </div>
+            </section>
           )}
         </div>
 
-        {/* ── Right sidebar — session history only ───────────── */}
-        <div className="dashboard-sidebar">
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <SessionHistoryPanel
-              activeSessionId={activeSessionId}
-              onSelectSession={(id) => { setActiveSessionId(id); setAutoExplanation(null); setChatOpen(true); }}
-            />
-          </div>
-        </div>
+        {/* ── Right sidebar — session history ─────────────────── */}
+        <aside className="dashboard-sidebar">
+          <SessionHistoryPanel
+            activeSessionId={activeSessionId}
+            onSelectSession={(id) => { setActiveSessionId(id); setAutoExplanation(null); setChatOpen(true); }}
+          />
+        </aside>
       </div>
 
       {/* ── Floating chat panel ─────────────────────────────────── */}
