@@ -81,4 +81,5 @@ async def get_session(
         feature_importance=SHAPValuesOut(**log.feature_importance) if log else None,
         faithfulness_score=log.faithfulness_score if log else None,
         per_modality_predictions=log.per_modality_predictions if log else None,
+        ig_attribution=log.ig_attribution if log else None,
     )

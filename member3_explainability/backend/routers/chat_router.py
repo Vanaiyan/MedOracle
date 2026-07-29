@@ -23,12 +23,13 @@ from member3_explainability.backend.schemas import (
     ChatRequest, ChatResponse, ChatHistoryResponse, ChatMessageOut,
 )
 from member3_explainability.backend.llm_client import get_llm_response
-from member3_explainability.evaluation.knowledge_base import Retriever
+from member3_explainability.evaluation.pdf_knowledge_base import combined_retriever
 
 router = APIRouter(prefix="/chat", tags=["Chatbot"])
 
-# RAG retriever over the curated citation knowledge base (shared instance).
-_retriever = Retriever()
+# RAG retriever over BOTH the curated one-liner facts and real chunked
+# excerpts extracted from the PDFs in evaluation/papers/ (shared instance).
+_retriever = combined_retriever()
 
 
 @router.post("", response_model=ChatResponse)

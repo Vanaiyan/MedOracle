@@ -80,6 +80,17 @@ class SHAPLog(Base):
     signal_reliability = Column(JSON,  nullable=False)   # {"eeg": str, "gsr": str, "video": str}
     coalition_values   = Column(JSON,  nullable=True)    # {"empty", "physio", "video", "full"}
     per_modality_predictions = Column(JSON, nullable=True)
+    ig_attribution     = Column(JSON,  nullable=True)
+    # Real, fused Integrated Gradients (attribution/fused_ig.py) — populated only
+    # for sessions created via /predict/multimodal (needs the real raw EEG/GSR/
+    # video tensors, which aren't persisted, so it can't be back-filled for
+    # older sessions). Shape:
+    #   {"target_emotion": str,
+    #    "eeg_channel_importance": {"ch00": float, ..., "ch31": float},
+    #    "gsr_importance": float,
+    #    "video_frame_importance": {"frame00": float, ..., "frame15": float},
+    #    "modality_totals": {"physio": float, "video": float},
+    #    "completeness_check": {"sum_attributions", "model_output_delta", "gap"}}
 
     session = relationship("Session", back_populates="shap_log")
 

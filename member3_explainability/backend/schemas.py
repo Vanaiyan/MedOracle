@@ -101,6 +101,10 @@ class PredictResponse(BaseModel):
     feature_importance:  SHAPValuesOut
     faithfulness_score:  float
     coalition_values:    Dict[str, float]
+    # Real, fused Integrated Gradients (attribution/fused_ig.py) -- only present
+    # for sessions created via /predict/multimodal with EEG+GSR+video all
+    # supplied (needs the real raw tensors). None otherwise.
+    ig_attribution:       Optional[Dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +171,7 @@ class SessionDetail(BaseModel):
     feature_importance:       Optional[SHAPValuesOut]
     faithfulness_score:       Optional[float]
     per_modality_predictions: Optional[Dict]
+    ig_attribution:           Optional[Dict] = None
 
 
 class SessionListResponse(BaseModel):

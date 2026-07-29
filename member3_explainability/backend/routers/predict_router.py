@@ -10,6 +10,7 @@ Author : Adshaya Balarajah (214024V)
 from __future__ import annotations
 
 import io
+import logging
 import uuid
 import tempfile
 import shutil
@@ -36,14 +37,21 @@ from member3_explainability.shap.synthetic_data import generate_prediction_outpu
 
 _ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".webm"}
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Prediction"])
 
 
 async def _persist_and_respond(
-    prediction_output: dict, user_id: str, db: AsyncSession
+    prediction_output: dict, user_id: str, db: AsyncSession,
+    ig_attribution: Optional[dict] = None,
 ) -> "PredictResponse":
     """Run SHAP on a prediction_output, store the session + SHAP log, return the
-    response. Shared by the fusion endpoints (currently /predict/multimodal)."""
+    response. Shared by the fusion endpoints (currently /predict/multimodal).
+
+    ig_attribution : real, fused Integrated Gradients result from
+        attribution/fused_ig.explain_fused() -- only computed by callers that
+        have BOTH the real EEG/GSR AND video tensors (see /predict/multimodal).
+    """
     shap_output = build_shap_output(prediction_output)
 
     session_id = str(uuid.uuid4())
@@ -67,6 +75,7 @@ async def _persist_and_respond(
         signal_reliability=shap_output["signal_reliability"],
         coalition_values=shap_output.get("coalition_values"),
         per_modality_predictions=shap_output.get("per_modality_predictions"),
+        ig_attribution=ig_attribution,
     ))
 
     return PredictResponse(
@@ -80,6 +89,7 @@ async def _persist_and_respond(
         feature_importance=SHAPValuesOut(**shap_output["feature_importance"]),
         faithfulness_score=shap_output["faithfulness_score"],
         coalition_values=shap_output.get("coalition_values", {}),
+        ig_attribution=ig_attribution,
     )
 
 
@@ -371,6 +381,7 @@ async def predict_multimodal(
         shutil.copyfileobj(file.file, tmp)
         tmp_path = Path(tmp.name)
 
+    ig_attribution = None
     try:
         try:
             from member2_video_fusion.pipeline import run_full_pipeline
@@ -383,6 +394,30 @@ async def predict_multimodal(
         prediction_output = run_full_pipeline(
             eeg=eeg_arr, gsr=gsr_arr, video_path=tmp_path
         )
+
+        # Real, fused Integrated Gradients -- only possible when we have BOTH
+        # real modalities' raw tensors (not just video-only). Best-effort: if
+        # torch/captum aren't installed, or the video can't be re-decoded, or
+        # anything else goes wrong, log and continue WITHOUT IG rather than
+        # failing the whole prediction -- SHAP explainability must not depend
+        # on this working.
+        if eeg_arr is not None and gsr_arr is not None:
+            try:
+                from member3_explainability.attribution.fused_ig import explain_fused
+                from member2_video_fusion.inference import _process_video
+
+                video_frames, _quality = _process_video(tmp_path)
+                if video_frames is not None:
+                    sq = prediction_output["signal_quality"]
+                    ig_attribution = explain_fused(
+                        eeg=eeg_arr, gsr=gsr_arr, video_frames=video_frames,
+                        eeg_quality=sq["eeg"], gsr_quality=sq["gsr"],
+                        video_quality=sq["video"],
+                    )
+            except ImportError as exc:
+                logger.warning("IG unavailable (torch/captum not installed?): %s", exc)
+            except Exception as exc:
+                logger.warning("IG computation failed, continuing without it: %s", exc)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     except HTTPException:
@@ -392,7 +427,7 @@ async def predict_multimodal(
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    return await _persist_and_respond(prediction_output, user_id, db)
+    return await _persist_and_respond(prediction_output, user_id, db, ig_attribution=ig_attribution)
 
 
 @router.get("/explain/{session_id}", response_model=ExplainResponse)
