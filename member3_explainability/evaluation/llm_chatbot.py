@@ -26,11 +26,14 @@ Author : Adshaya Balarajah (214024V)
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Callable, Dict, Optional
 
 from member3_explainability.evaluation.knowledge_base import Retriever
 from member3_explainability.evaluation.metrics import score_explanation
+
+logger = logging.getLogger(__name__)
 
 
 def build_prompt(conflict: Dict, facts) -> str:
@@ -69,9 +72,11 @@ def _anthropic_generate(prompt: str, feedback: Optional[str] = None) -> Optional
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=key)
+        model = "claude-sonnet-5"
+        logger.info("Using AI model: Anthropic Claude (%s)", model)
         content = prompt if not feedback else prompt + "\n\nCORRECTION:\n" + feedback
         msg = client.messages.create(
-            model="claude-sonnet-5",
+            model=model,
             max_tokens=400,
             messages=[{"role": "user", "content": content}],
         )

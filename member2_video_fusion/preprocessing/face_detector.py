@@ -22,8 +22,8 @@ Signal quality thresholds (CLAUDE.md)
     Metric               Good        Degraded      Poor
     ------------------   ---------   -----------   ------
     Face detection rate  ≥ 80%       50 – 80%      < 50%
-    Laplacian variance   ≥ 100       50 – 100      < 50
-    Face bounding box    > 10% area  5 – 10%       < 5%
+    Laplacian variance   ≥ 70        40 – 70       < 40    (recalibrated)
+    Face bounding box    > 6% area   3 – 6%        < 3%    (recalibrated)
 
     Rule: worst-performing metric determines the overall grade.
     Citation: Pech-Pacheco et al. (2000) for Laplacian variance.
@@ -62,13 +62,19 @@ FACE_PAD        = 0.20      # padding added around face crop (fraction of bbox s
 YOLO_CONF       = 0.40      # minimum YOLO confidence threshold
 YOLO_MODEL_NAME = "yolov8n-face.pt"
 
-# Quality thresholds
+# Quality thresholds — recalibrated for the acted frontal-face video domain
+# (CREMA-D/RAVDESS, ~360-720p). The original generic values (Laplacian>=100,
+# area>=0.10, from document-scan literature) graded ~80% of clean, fully-detected
+# frontal-face clips as "degraded" (measured Laplacian median ~95, area median
+# ~0.10). These values grade typical clean clips "good" while still flagging
+# genuine degradation: blur (Laplacian<40), tiny/distant faces (area<0.03), and
+# missed detection (rate<0.50) → "poor".
 _DETECT_RATE_GOOD     = 0.80
 _DETECT_RATE_DEGRADED = 0.50
-_LAP_VAR_GOOD         = 100.0
-_LAP_VAR_DEGRADED     = 50.0
-_FACE_AREA_GOOD       = 0.10
-_FACE_AREA_DEGRADED   = 0.05
+_LAP_VAR_GOOD         = 70.0    # was 100.0
+_LAP_VAR_DEGRADED     = 40.0    # was 50.0
+_FACE_AREA_GOOD       = 0.06    # was 0.10
+_FACE_AREA_DEGRADED   = 0.03    # was 0.05
 
 SignalQuality = str   # "good" | "degraded" | "poor"
 
