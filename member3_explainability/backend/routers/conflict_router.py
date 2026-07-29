@@ -36,10 +36,12 @@ from member3_explainability.conflict.gate import run_gate, physio_quality_of
 from member3_explainability.conflict.synthetic_conflict import generate_conflict_case
 from member3_explainability.shap.shap_output_builder import build_shap_output
 from member3_explainability.evaluation.llm_chatbot import generate_explanation
-from member3_explainability.evaluation.knowledge_base import Retriever
+from member3_explainability.evaluation.pdf_knowledge_base import combined_retriever
 
 router = APIRouter(tags=["Conflict Explanation"])
-_retriever = Retriever()
+# Retrieves from BOTH the curated one-liner facts and real chunked excerpts
+# extracted from the PDFs in evaluation/papers/ (see pdf_knowledge_base.py).
+_retriever = combined_retriever()
 EMOTIONS = ["stress", "calm", "happy", "sad", "angry"]
 
 

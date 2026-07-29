@@ -484,8 +484,8 @@ async def get_llm_response(
             }
         messages.append({"role": "user", "content": user_message})
 
-    # ── 3. Try live LLMs: Groq, then Gemini, then OpenRouter/DeepSeek ──────
-    for caller in (_call_groq, _call_gemini, _call_deepseek):
+    # ── 3. Try live LLMs: Gemini, then Groq, then OpenRouter/DeepSeek ──────
+    for caller in (_call_gemini, _call_groq, _call_deepseek):
         try:
             reply = await caller(messages, system)
             logger.info("AI response served by %s", caller.__name__)

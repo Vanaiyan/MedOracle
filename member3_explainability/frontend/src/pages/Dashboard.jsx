@@ -8,6 +8,7 @@ import NavBar from '../components/NavBar';
 import StatCards from '../components/StatCards';
 import EmotionTrendChart from '../components/EmotionTrendChart';
 import SHAPBarChart from '../components/SHAPBarChart';
+import IGAttributionPanel from '../components/IGAttributionPanel';
 import ConflictExplanationPanel from '../components/ConflictExplanationPanel';
 import SessionHistoryPanel from '../components/SessionHistoryPanel';
 import ChatbotPanel from '../components/ChatbotPanel';
@@ -284,7 +285,7 @@ export default function Dashboard() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="video/mp4,video/avi,video/quicktime,video/x-matroska,video/x-flv,video/webm"
+              accept=".mp4,.avi,.mov,.mkv,.flv,.webm,video/mp4,video/avi,video/x-msvideo,video/quicktime,video/x-matroska,video/x-flv,video/webm"
               style={{ display: 'none' }}
               onChange={e => { setVideoFile(e.target.files[0] || null); setVideoError(null); }}
             />
@@ -412,6 +413,9 @@ export default function Dashboard() {
               faithfulness={shap?.faithfulness_score}
             />
           </div>
+
+          {/* Real, fused Integrated Gradients — direct comparison against SHAP above */}
+          <IGAttributionPanel igAttribution={sessionDetail?.ig_attribution} />
 
           {/* Modality-Conflict Explanation (Member 3 novel contribution) */}
           <ConflictExplanationPanel sessionId={activeSessionId} />
