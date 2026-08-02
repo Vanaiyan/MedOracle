@@ -191,6 +191,43 @@ def build_loso_datasets(
 
 
 # ---------------------------------------------------------------------------
+# K-Fold dataset builder (shared by 5-fold group and 10-fold stratified)
+# ---------------------------------------------------------------------------
+
+def build_kfold_datasets(
+    train_windows : List[WindowSample],
+    test_windows  : List[WindowSample],
+    augment_train : bool = True,
+) -> Tuple[DEAPWindowDataset, DEAPWindowDataset, EEGPreprocessor, GSRPreprocessor]:
+    """
+    Build train/test datasets for one k-fold split.
+
+    Preprocessors are fitted on training windows ONLY — never on test windows.
+    Used by both 5-fold GroupKFold and 10-fold StratifiedKFold.
+
+    Parameters
+    ----------
+    train_windows : list of WindowSample for training
+    test_windows  : list of WindowSample for testing
+    augment_train : apply augmentation to training set
+
+    Returns
+    -------
+    train_dataset, test_dataset, fitted_eeg_prep, fitted_gsr_prep
+    """
+    train_eeg = np.stack([w.eeg for w in train_windows], axis=0)  # (N_train, 32, 512)
+    train_gsr = np.stack([w.gsr for w in train_windows], axis=0)  # (N_train, 512)
+
+    eeg_prep = EEGPreprocessor().fit(train_eeg)
+    gsr_prep = GSRPreprocessor().fit(train_gsr)
+
+    train_ds = DEAPWindowDataset(train_windows, eeg_prep, gsr_prep, augment=augment_train)
+    test_ds  = DEAPWindowDataset(test_windows,  eeg_prep, gsr_prep, augment=False)
+
+    return train_ds, test_ds, eeg_prep, gsr_prep
+
+
+# ---------------------------------------------------------------------------
 # Self-test (requires mock data — no actual DEAP needed)
 # ---------------------------------------------------------------------------
 
