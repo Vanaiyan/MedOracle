@@ -1,9 +1,4 @@
 """
-member1_physiological/verify_compare.py
-========================================
-Side-by-side comparison of BiCrossModal vs SVM vs RF vs MLP
-on the same held-out subject windows (LOSO fold).
-
 Shows for each window:
   - True label
   - BiCrossModal prediction
@@ -17,8 +12,6 @@ Usage:
         --data_dir   data/DEAP \
         --test_subject s01 \
         --n_samples  20
-
-Author: Suhira Balarajan (214206G)
 """
 
 import argparse
