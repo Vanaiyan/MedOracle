@@ -1,7 +1,5 @@
 """
-member1_physiological/verify_prediction.py
-==========================================
-Sanity check: load a DEAP subject, show true label vs predicted label
+Check: load a DEAP subject, show true label vs predicted label
 for each window so you can verify the model is working correctly.
 
 Usage:
@@ -9,8 +7,6 @@ Usage:
         --checkpoint member1_physiological/checkpoints/fold_00_s01_best.pt \
         --dat_file   data/DEAP/s01.dat \
         --n_samples  10
-
-Author: Suhira Balarajan (214206G)
 """
 
 import argparse
