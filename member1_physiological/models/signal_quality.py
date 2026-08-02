@@ -7,34 +7,27 @@ from scipy.signal import find_peaks
 
 QualityLevel = Literal["good", "degraded", "poor"]
 
-SAMPLE_RATE    = 128   # Hz
-WINDOW_SAMPLES = 512   # 4 s × 128 Hz
+SAMPLE_RATE    = 128   
+WINDOW_SAMPLES = 512  
 
-# EEG thresholds (µV — applies to raw or scaled signal)
-EEG_AMP_GOOD      = 100.0   # µV — max absolute amplitude for "good"
-EEG_AMP_DEGRADED  = 150.0   # µV — threshold for "poor"
-EEG_FLAT_GOOD     = 0       # flat-line channels for "good"
-EEG_FLAT_DEGRADED = 2       # max flat-line channels for "degraded"
-EEG_NAN_GOOD      = 0.01    # fraction — < 1% NaN for "good"
-EEG_NAN_DEGRADED  = 0.05    # fraction — < 5% NaN for "degraded"
+EEG_AMP_GOOD      = 100.0  
+EEG_AMP_DEGRADED  = 150.0  
+EEG_FLAT_GOOD     = 0      
+EEG_FLAT_DEGRADED = 2       
+EEG_NAN_GOOD      = 0.01    
+EEG_NAN_DEGRADED  = 0.05    
+EEG_FLAT_STD_THRESHOLD = 1e-4  # Flat-line detection
 
-# GSR thresholds (µS)
-GSR_RANGE_GOOD_LO   = 0.5    # µS  lower bound for "good" range
-GSR_RANGE_GOOD_HI   = 30.0   # µS  upper bound for "good" range
-GSR_RANGE_DEG_LO    = 0.1    # µS  lower bound for "degraded" range
-GSR_RANGE_DEG_HI    = 50.0   # µS  upper bound for "degraded" range
-GSR_PEAKS_GOOD      = 2      # minimum SCR peaks for "good"
-GSR_PEAKS_DEGRADED  = 1      # minimum SCR peaks for "degraded"
-GSR_DRIFT_GOOD      = 0.1    # µS/s — slope magnitude for "good"
-GSR_DRIFT_DEGRADED  = 0.5    # µS/s — slope magnitude for "degraded"
+GSR_RANGE_GOOD_LO   = 0.5    
+GSR_RANGE_GOOD_HI   = 30.0   
+GSR_RANGE_DEG_LO    = 0.1    
+GSR_RANGE_DEG_HI    = 50.0   
+GSR_PEAKS_GOOD      = 2     
+GSR_PEAKS_DEGRADED  = 1      
+GSR_DRIFT_GOOD      = 0.1    
+GSR_DRIFT_DEGRADED  = 0.5    
 
-# Flat-line detection: std < this threshold → flat channel
-EEG_FLAT_STD_THRESHOLD = 1e-4
-
-
-# ---------------------------------------------------------------------------
-# EEG quality
-# ---------------------------------------------------------------------------
+# EEG quality ---------------------------------------------------------------------------
 
 def assess_eeg_quality(eeg: np.ndarray, raw: bool = True) -> QualityLevel:
     assert eeg.shape == (32, WINDOW_SAMPLES), \
@@ -42,7 +35,7 @@ def assess_eeg_quality(eeg: np.ndarray, raw: bool = True) -> QualityLevel:
 
     grades = []
 
-    # ---- Metric 1: NaN ratio ----
+    # Metric 1: NaN ratio ----
     nan_ratio = float(np.isnan(eeg).mean())
     if nan_ratio > EEG_NAN_DEGRADED:
         grades.append("poor")
@@ -51,7 +44,7 @@ def assess_eeg_quality(eeg: np.ndarray, raw: bool = True) -> QualityLevel:
     else:
         grades.append("good")
 
-    # ---- Metric 2: Amplitude range (only meaningful on raw µV data) ----
+    # Metric 2: Amplitude range ----
     if raw:
         max_abs = float(np.nanmax(np.abs(eeg)))
         if max_abs > EEG_AMP_DEGRADED:
@@ -61,9 +54,8 @@ def assess_eeg_quality(eeg: np.ndarray, raw: bool = True) -> QualityLevel:
         else:
             grades.append("good")
 
-    # ---- Metric 3: Flat-line channels ----
-    # A channel is "flat" if its std is near zero (constant signal → broken electrode)
-    channel_stds = np.nanstd(eeg, axis=1)   # (32,)
+    # Metric 3: Flat-line channels ----
+    channel_stds = np.nanstd(eeg, axis=1)  
     n_flat = int(np.sum(channel_stds < EEG_FLAT_STD_THRESHOLD))
     if n_flat > EEG_FLAT_DEGRADED:
         grades.append("poor")
@@ -73,7 +65,6 @@ def assess_eeg_quality(eeg: np.ndarray, raw: bool = True) -> QualityLevel:
         grades.append("good")
 
     return _worst_grade(grades)
-
 
 def get_eeg_quality_details(eeg: np.ndarray, raw: bool = True) -> Dict:
     """Return detailed quality metrics dictionary for debugging."""
@@ -91,10 +82,7 @@ def get_eeg_quality_details(eeg: np.ndarray, raw: bool = True) -> Dict:
         "flat_channel_ids": flat_chs,
     }
 
-
-# ---------------------------------------------------------------------------
-# GSR quality
-# ---------------------------------------------------------------------------
+# GSR quality ---------------------------------------------------------------------------
 
 def assess_gsr_quality(gsr: np.ndarray, use_raw_units: bool = True) -> QualityLevel:
     """
@@ -115,8 +103,7 @@ def assess_gsr_quality(gsr: np.ndarray, use_raw_units: bool = True) -> QualityLe
 
     grades = []
 
-    # ---- Metric 1: Signal validity ----
-    # Instead of µS range, check for flat-line or all-NaN
+    # Metric 1: Signal validity ----
     if np.isnan(gsr).all():
         return "poor"
 
@@ -129,16 +116,13 @@ def assess_gsr_quality(gsr: np.ndarray, use_raw_units: bool = True) -> QualityLe
         grades.append("good")
 
     if use_raw_units:
-        # Statistical check: signal should have meaningful variance
-        # A flat-line or saturated GSR has near-zero std
         gsr_std = float(np.nanstd(gsr))
         gsr_range = float(np.nanmax(gsr) - np.nanmin(gsr))
         if gsr_std < 1e-6 or gsr_range < 1e-6:
-            grades.append("poor")   # completely flat — sensor failure
+            grades.append("poor") 
         else:
             grades.append("good")
     else:
-        # Original µS-based range check (for truly converted data)
         gsr_min = float(np.nanmin(gsr))
         gsr_max = float(np.nanmax(gsr))
         if gsr_min < GSR_RANGE_DEG_LO or gsr_max > GSR_RANGE_DEG_HI:
@@ -148,16 +132,14 @@ def assess_gsr_quality(gsr: np.ndarray, use_raw_units: bool = True) -> QualityLe
         else:
             grades.append("good")
 
-    # ---- Metric 2: SCR peaks (relative detection) ----
-    # Use deviation from local median instead of absolute height threshold
+    # Metric 2: SCR peaks  ----
     median_val = float(np.nanmedian(gsr))
     gsr_std    = float(np.nanstd(gsr))
-    # Peak must be at least 0.5 std above median to count
     peak_height_threshold = median_val + 0.5 * gsr_std
     peaks, _ = find_peaks(
         gsr,
         height   = peak_height_threshold,
-        distance = SAMPLE_RATE,   # at least 1s between peaks
+        distance = SAMPLE_RATE,  
     )
     n_peaks = len(peaks)
     if n_peaks < GSR_PEAKS_DEGRADED:
@@ -167,11 +149,10 @@ def assess_gsr_quality(gsr: np.ndarray, use_raw_units: bool = True) -> QualityLe
     else:
         grades.append("good")
 
-    # ---- Metric 3: Drift (relative) ----
+    # Metric 3: Drift ----
     t = np.arange(WINDOW_SAMPLES, dtype=np.float32) / SAMPLE_RATE
     slope     = _linear_slope(t, gsr)
     gsr_std   = float(np.nanstd(gsr))
-    # Normalise slope by signal std so it's unit-agnostic
     rel_slope = abs(slope) / (gsr_std + 1e-8)
     if rel_slope > 0.5:
         grades.append("poor")
@@ -191,17 +172,14 @@ def get_gsr_quality_details(gsr: np.ndarray) -> Dict:
     overall = assess_gsr_quality(gsr, use_raw_units=True)
     return {
         "overall"        : overall,
-        "gsr_min"        : float(np.nanmin(gsr)),   # raw units, not µS
+        "gsr_min"        : float(np.nanmin(gsr)),
         "gsr_max"        : float(np.nanmax(gsr)),
         "gsr_std"        : gsr_std,
         "n_scr_peaks"    : len(peaks),
         "drift_rel_slope": float(abs(slope) / (gsr_std + 1e-8)),
     }
 
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+# Internal helpers ---------------------------------------------------------------------------
 
 _GRADE_ORDER = {"poor": 2, "degraded": 1, "good": 0}
 _GRADE_NAMES = ["good", "degraded", "poor"]
@@ -224,10 +202,7 @@ def _linear_slope(t: np.ndarray, y: np.ndarray) -> float:
                    ((t_v - t_mean) ** 2).sum())
     return slope
 
-
-# ---------------------------------------------------------------------------
-# Self-test
-# ---------------------------------------------------------------------------
+# for my testing purpose --------------------------------------------------------------------------
 
 if __name__ == "__main__":
     rng = np.random.default_rng(42)
@@ -254,6 +229,6 @@ if __name__ == "__main__":
     bad_gsr = np.full(512, 0.05, dtype=np.float32)   # < 0.1 µS
     assert assess_gsr_quality(bad_gsr) == "poor", "Below range → poor"
 
-    print("✓ Signal quality module self-test passed")
+    print("Signal quality module self-test passed")
     print(get_eeg_quality_details(good_eeg, raw=True))
     print(get_gsr_quality_details(good_gsr))

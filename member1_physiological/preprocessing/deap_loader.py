@@ -7,25 +7,22 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import sys
 
-# Allow running from any directory
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from shared.label_harmonization import map_deap_to_class, EMOTION_CLASSES
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+# Constants---------------------------------------------------------------------------
 
-SAMPLE_RATE      = 128          # Hz — all channels in preprocessed DEAP
-BASELINE_SAMPLES = 3 * SAMPLE_RATE   # 384 samples = 3 seconds to trim
-TRIAL_SAMPLES    = 60 * SAMPLE_RATE  # 7680 samples = 60 seconds remaining
-WINDOW_SAMPLES   = 4 * SAMPLE_RATE   # 512 samples = 4 seconds per window
-WINDOWS_PER_TRIAL = TRIAL_SAMPLES // WINDOW_SAMPLES  # = 15
+SAMPLE_RATE      = 128          
+BASELINE_SAMPLES = 3 * SAMPLE_RATE   
+TRIAL_SAMPLES    = 60 * SAMPLE_RATE  
+WINDOW_SAMPLES   = 4 * SAMPLE_RATE   
+WINDOWS_PER_TRIAL = TRIAL_SAMPLES // WINDOW_SAMPLES  
 
-EEG_CHANNELS = list(range(32))  # indices 0–31
-GSR_CHANNEL  = 36               # GSR/EDA channel index in preprocessed file
+EEG_CHANNELS = list(range(32))  
+GSR_CHANNEL  = 36              
 
 EEG_CHANNEL_NAMES = [
     "Fp1","AF3","F3","F7","FC5","FC1","C3","T7","CP5","CP1","P3","P7",
@@ -33,15 +30,12 @@ EEG_CHANNEL_NAMES = [
     "FC6","FC2","F8","F4","AF4","Fp2","Fz","Cz"
 ]
 
-
-# ---------------------------------------------------------------------------
-# Data containers
-# ---------------------------------------------------------------------------
+# Data containers---------------------------------------------------------------------------
 
 @dataclass
 class WindowSample:
-    eeg        : np.ndarray      # (32, 512)
-    gsr        : np.ndarray      # (512,)
+    eeg        : np.ndarray     
+    gsr        : np.ndarray     
     label_str  : str
     label_int  : int
     subject_id : str
@@ -78,10 +72,7 @@ class SubjectData:
         labels = np.array([w.label_int for w in self.windows], dtype=np.int64)
         return eeg, gsr, labels
 
-
-# ---------------------------------------------------------------------------
-# Loader
-# ---------------------------------------------------------------------------
+# Loader ---------------------------------------------------------------------------
 
 class DEAPLoader:
 
@@ -93,10 +84,6 @@ class DEAPLoader:
         self.data_dir = data_dir
         self.verbose  = verbose
         self._subject_data: Dict[str, SubjectData] = {}
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def load_all(self) -> Dict[str, SubjectData]:
         dat_files = sorted(glob.glob(os.path.join(self.data_dir, "s*.dat")))
@@ -110,7 +97,7 @@ class DEAPLoader:
         self._log(f"Found {len(dat_files)} subject files in '{self.data_dir}'")
 
         for fpath in dat_files:
-            subj_id = os.path.splitext(os.path.basename(fpath))[0]  # e.g. "s01"
+            subj_id = os.path.splitext(os.path.basename(fpath))[0]
             subj_data = self._load_subject(fpath, subj_id)
             self._subject_data[subj_id] = subj_data
             self._log(
@@ -156,28 +143,23 @@ class DEAPLoader:
             f"Expected data shape (40,40,8064), got {data_shape}"
         assert labels_shape == (40, 4), \
             f"Expected labels shape (40,4), got {labels_shape}"
-        self._log("✓ DEAP data structure verified (s01.dat)")
+        self._log("DEAP data structure verified (s01.dat)")
         return True
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
+    # Internal helpers ---------------------------------------------------------------------------
+   
     def _load_subject(self, fpath: str, subj_id: str) -> SubjectData:
 
         raw    = self._pickle_load(fpath)
-        data   = raw["data"]    # (40, 40, 8064)
-        labels = raw["labels"]  # (40, 4)
+        data   = raw["data"]    
+        labels = raw["labels"]  
 
-        # Trim 3-second baseline from all channels
-        # Resulting shape: (40, 40, 7680)  — 60 seconds at 128 Hz
         data_trimmed = data[:, :, BASELINE_SAMPLES:]
 
         subj_data = SubjectData(subject_id=subj_id)
 
         for trial_idx in range(data_trimmed.shape[0]):
 
-            # Clamp to [1, 9] — a few DEAP trials have 0 ratings (data artifact)
             v = float(np.clip(labels[trial_idx, 0], 1.0, 9.0))   # Valence
             a = float(np.clip(labels[trial_idx, 1], 1.0, 9.0))   # Arousal
             d = float(np.clip(labels[trial_idx, 2], 1.0, 9.0))   # Dominance
@@ -185,23 +167,22 @@ class DEAPLoader:
             # --- Label harmonization ---
             emotion_str = map_deap_to_class(v, a, d)
             if emotion_str is None:
-                # Unclassifiable V/A/D combination — skip this trial
                 subj_data.skipped_trials.append(trial_idx)
                 continue
 
             emotion_int = EMOTION_CLASSES[emotion_str]
 
             # --- Extract EEG + GSR for this trial ---
-            eeg_trial = data_trimmed[trial_idx, :32, :]    # (32, 7680)
-            gsr_trial = data_trimmed[trial_idx, 36, :]     # (7680,)
+            eeg_trial = data_trimmed[trial_idx, :32, :]   
+            gsr_trial = data_trimmed[trial_idx, 36, :]    
 
             # --- Slide 4-second windows ---
             for w_idx in range(WINDOWS_PER_TRIAL):
                 start = w_idx * WINDOW_SAMPLES
                 end   = start + WINDOW_SAMPLES
 
-                eeg_window = eeg_trial[:, start:end].copy()  # (32, 512)
-                gsr_window = gsr_trial[start:end].copy()      # (512,)
+                eeg_window = eeg_trial[:, start:end].copy()  
+                gsr_window = gsr_trial[start:end].copy()     
 
                 # Shape validation (catches any indexing bugs early)
                 assert eeg_window.shape == (32, WINDOW_SAMPLES), \
@@ -235,10 +216,7 @@ class DEAPLoader:
         if self.verbose:
             print(msg)
 
-
-# ---------------------------------------------------------------------------
-# Quick self-test (run as script)
-# ---------------------------------------------------------------------------
+# Quick self-test (run as script) ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import argparse
