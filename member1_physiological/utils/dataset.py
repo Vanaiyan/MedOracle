@@ -1,6 +1,4 @@
 """
-member1_physiological/utils/dataset.py
-========================================
 PyTorch Dataset for DEAP EEG + GSR windows
 
 How the dataset is used in LOSO training:
@@ -13,8 +11,6 @@ How the dataset is used in LOSO training:
 Two dataset classes:
   1. DEAPWindowDataset — wraps pre-loaded WindowSample lists with preprocessing
   2. build_loso_datasets() — helper that builds train/test pairs for one fold
-
-Author: Suhira Balarajan (214206G)
 """
 
 from __future__ import annotations
