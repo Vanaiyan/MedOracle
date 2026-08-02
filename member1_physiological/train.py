@@ -53,7 +53,7 @@ if _repo_root not in sys.path:
 
 from member1_physiological.preprocessing.deap_loader import DEAPLoader, SubjectData
 from member1_physiological.models.physiological_net import PhysiologicalNet
-from member1_physiological.utils.dataset import build_loso_datasets
+from member1_physiological.utils.dataset import build_loso_datasets, build_kfold_datasets
 from member1_physiological.utils.metrics import (
     compute_fold_metrics,
     aggregate_loso_metrics,
@@ -753,6 +753,375 @@ def train_random_split(
 
 
 # ---------------------------------------------------------------------------
+# 5-Fold Subject-wise GroupKFold training (cross-subject, rigorous)
+# ---------------------------------------------------------------------------
+
+def train_5fold_group(
+    subject_data : Dict[str, SubjectData],
+    config       : TrainConfig,
+    device       : torch.device,
+) -> Dict:
+    """
+    Train with 5-fold subject-wise GroupKFold.
+
+    Groups are defined by subject ID — no subject appears in both train and
+    test within the same fold. This is cross-subject evaluation, sitting
+    between LOSO (hardest) and random split (easiest).
+
+    5 folds × ~6–7 test subjects each → mean ± std macro-F1 reported.
+
+    Returns aggregated metrics dict (same format as train_loso).
+    """
+    from sklearn.model_selection import GroupKFold
+    from member1_physiological.preprocessing.eeg_preprocessor import EEGPreprocessor
+    from member1_physiological.preprocessing.gsr_preprocessor import GSRPreprocessor
+
+    os.makedirs(config.checkpoint_dir, exist_ok=True)
+    os.makedirs(config.log_dir, exist_ok=True)
+
+    log_path = os.path.join(config.log_dir, "5fold_group_training.log")
+    log_file = open(log_path, "a", encoding="utf-8")
+
+    _log(f"\n{'#' * 78}", log_file)
+    _log(f"# MedOracle — PhysiologicalNet 5-Fold Subject GroupKFold Training", log_file)
+    _log(f"# Device : {device}", log_file)
+    _log(f"# Config : {dataclasses.asdict(config)}", log_file)
+    _log(f"{'#' * 78}", log_file)
+
+    # Collect all windows and assign group = subject index (integer)
+    subject_ids = sorted(subject_data.keys())
+    all_windows = []
+    all_groups  = []
+
+    for grp_idx, sid in enumerate(subject_ids):
+        windows = subject_data[sid].windows
+        all_windows.extend(windows)
+        all_groups.extend([grp_idx] * len(windows))
+
+    all_groups = np.array(all_groups)
+    _log(f"Total windows: {len(all_windows):,} across {len(subject_ids)} subjects", log_file)
+
+    gkf          = GroupKFold(n_splits=5)
+    fold_results = []
+
+    for fold_idx, (train_idx, test_idx) in enumerate(gkf.split(all_windows, groups=all_groups)):
+        train_windows = [all_windows[i] for i in train_idx]
+        test_windows  = [all_windows[i] for i in test_idx]
+
+        test_subj_indices = sorted(set(all_groups[test_idx]))
+        test_subj_ids     = [subject_ids[i] for i in test_subj_indices]
+
+        sep  = "=" * 78
+        dash = "-" * 78
+        _log(f"\n{sep}", log_file)
+        _log(
+            f"5-Fold GroupKFold — Fold {fold_idx + 1}/5 | "
+            f"Test subjects: {', '.join(test_subj_ids)}", log_file
+        )
+        _log(
+            f"  Train windows: {len(train_windows):,}  |  "
+            f"Test windows: {len(test_windows):,}", log_file
+        )
+
+        train_ds, test_ds, eeg_prep, gsr_prep = build_kfold_datasets(
+            train_windows, test_windows, augment_train=config.augment_train
+        )
+
+        train_loader = DataLoader(
+            train_ds, batch_size=config.batch_size, shuffle=True,
+            num_workers=config.num_workers, drop_last=False,
+        )
+        test_loader = DataLoader(
+            test_ds, batch_size=config.batch_size * 2, shuffle=False,
+            num_workers=config.num_workers,
+        )
+
+        class_weights = compute_class_weights(train_ds.labels, device=device)
+        weight_str    = "  ".join(
+            f"{n}={float(class_weights[i]):.3f}"
+            for i, n in enumerate(["stress", "calm", "happy", "sad", "angry"])
+        )
+        _log(f"  Class weights: {weight_str}", log_file)
+        _log(sep, log_file)
+
+        model = PhysiologicalNet(
+            d_model=config.d_model, n_heads=config.n_heads,
+            n_layers=config.n_layers, dropout=config.dropout,
+        ).to(device)
+
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+        )
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", patience=config.lr_patience,
+            factor=config.lr_factor, min_lr=config.min_lr,
+        )
+
+        best_f1, best_metrics, best_epoch = -1.0, None, 0
+        patience_counter = 0
+        eeg_mean, eeg_std = eeg_prep.get_stats()
+        gsr_mean, gsr_std = gsr_prep.get_stats()
+
+        for epoch in range(1, config.n_epochs + 1):
+            t0 = time.time()
+            train_loss, train_acc = train_one_epoch(
+                model, train_loader, optimizer, criterion, device, config.grad_clip
+            )
+            y_true, y_pred = evaluate(model, test_loader, device)
+            metrics        = compute_fold_metrics(y_true, y_pred)
+            val_f1         = metrics["macro_f1"]
+
+            scheduler.step(val_f1)
+            current_lr = optimizer.param_groups[0]["lr"]
+            is_best    = val_f1 > best_f1
+            marker     = "  [BEST]" if is_best else ""
+
+            _log(
+                f"  Epoch {epoch:3d}/{config.n_epochs} | "
+                f"loss={train_loss:.4f} | train_acc={train_acc:.4f} | "
+                f"val_F1={val_f1:.4f} | lr={current_lr:.3e} | "
+                f"{time.time() - t0:.1f}s{marker}",
+                log_file,
+            )
+
+            if is_best:
+                best_f1, best_metrics, best_epoch = val_f1, metrics, epoch
+                patience_counter = 0
+                torch.save({
+                    "model_state_dict": model.state_dict(),
+                    "eeg_mean": eeg_mean, "eeg_std": eeg_std,
+                    "gsr_mean": float(gsr_mean), "gsr_std": float(gsr_std),
+                    "config":   dataclasses.asdict(config),
+                    "metrics":  metrics,
+                    "epoch":    epoch,
+                    "eval_mode":  "5fold_group",
+                    "test_subjects": test_subj_ids,
+                }, os.path.join(config.checkpoint_dir, f"5fold_group_fold{fold_idx + 1:02d}_best.pt"))
+            else:
+                patience_counter += 1
+                if patience_counter >= config.patience:
+                    _log(f"  Early stop at epoch {epoch}", log_file)
+                    break
+
+        _log(dash, log_file)
+        _log(
+            f"  Fold {fold_idx + 1} result: best macro-F1 = {best_f1:.4f} @ epoch {best_epoch}",
+            log_file,
+        )
+        _log(format_fold_report(best_metrics, fold_idx + 1, "+".join(test_subj_ids)), log_file)
+        fold_results.append(best_metrics)
+
+    agg = aggregate_loso_metrics(fold_results)
+
+    summary = (
+        f"\n{'=' * 60}\n"
+        f"5-FOLD SUBJECT GROUPKFOLD RESULTS\n"
+        f"(cross-subject — no subject leakage)\n"
+        f"{'=' * 60}\n"
+        f"Mean Macro-F1 : {agg['mean_macro_f1']:.4f} ± {agg['std_macro_f1']:.4f}  [PRIMARY]\n"
+        f"Mean Accuracy : {agg['mean_accuracy']:.4f} ± {agg['std_accuracy']:.4f}\n"
+        f"{'=' * 60}\n"
+        f"Per-class mean F1:\n"
+    )
+    for cls, f1 in agg["per_class_mean_f1"].items():
+        summary += f"  {cls:<8}: {f1:.4f}\n"
+    summary += f"{'=' * 60}"
+
+    _log(summary, log_file)
+
+    summary_path = os.path.join(config.log_dir, "5fold_group_summary.json")
+    _save_summary_json(agg, fold_results, [f"fold{i+1}" for i in range(5)], summary_path)
+    _log(f"\nSummary JSON: {summary_path}", log_file)
+    log_file.close()
+
+    print(summary)
+    print(f"\nLog     : {log_path}")
+    print(f"Summary : {summary_path}")
+    return agg
+
+
+# ---------------------------------------------------------------------------
+# 10-Fold Stratified KFold training (within-subject, AlgoRidge-style)
+# ---------------------------------------------------------------------------
+
+def train_10fold_stratified(
+    subject_data : Dict[str, SubjectData],
+    config       : TrainConfig,
+    device       : torch.device,
+    seed         : int = 42,
+) -> Dict:
+    """
+    Train with 10-fold stratified KFold on the full window pool.
+
+    Windows from all subjects are pooled and split randomly into 10 folds,
+    stratified by class label. The same subject may appear in both train and
+    test within a fold (within-subject leakage — intentional for comparison).
+
+    This mirrors AlgoRidge's protocol and produces inflated results compared
+    to LOSO or 5-fold GroupKFold. Use only for comparison, not as primary
+    metric.
+
+    Returns aggregated metrics dict.
+    """
+    from sklearn.model_selection import StratifiedKFold
+
+    os.makedirs(config.checkpoint_dir, exist_ok=True)
+    os.makedirs(config.log_dir, exist_ok=True)
+
+    log_path = os.path.join(config.log_dir, "10fold_stratified_training.log")
+    log_file = open(log_path, "a", encoding="utf-8")
+
+    _log(f"\n{'#' * 78}", log_file)
+    _log(f"# MedOracle — PhysiologicalNet 10-Fold Stratified KFold (AlgoRidge-style)", log_file)
+    _log(f"# NOTE: within-subject leakage — for comparison only, not primary metric", log_file)
+    _log(f"# Device : {device}", log_file)
+    _log(f"{'#' * 78}", log_file)
+
+    # Pool all windows across all subjects
+    subject_ids = sorted(subject_data.keys())
+    all_windows = []
+    for sid in subject_ids:
+        all_windows.extend(subject_data[sid].windows)
+
+    all_labels = np.array([w.label_int for w in all_windows])
+    _log(f"Total windows: {len(all_windows):,} across {len(subject_ids)} subjects", log_file)
+
+    skf          = StratifiedKFold(n_splits=10, shuffle=True, random_state=seed)
+    fold_results = []
+
+    for fold_idx, (train_idx, test_idx) in enumerate(skf.split(all_windows, all_labels)):
+        train_windows = [all_windows[i] for i in train_idx]
+        test_windows  = [all_windows[i] for i in test_idx]
+
+        sep  = "=" * 78
+        dash = "-" * 78
+        _log(f"\n{sep}", log_file)
+        _log(
+            f"10-Fold Stratified — Fold {fold_idx + 1}/10 | "
+            f"Train: {len(train_windows):,}  Test: {len(test_windows):,}", log_file
+        )
+        _log(sep, log_file)
+
+        train_ds, test_ds, eeg_prep, gsr_prep = build_kfold_datasets(
+            train_windows, test_windows, augment_train=config.augment_train
+        )
+
+        train_loader = DataLoader(
+            train_ds, batch_size=config.batch_size, shuffle=True,
+            num_workers=config.num_workers, drop_last=False,
+        )
+        test_loader = DataLoader(
+            test_ds, batch_size=config.batch_size * 2, shuffle=False,
+            num_workers=config.num_workers,
+        )
+
+        class_weights = compute_class_weights(train_ds.labels, device=device)
+        weight_str    = "  ".join(
+            f"{n}={float(class_weights[i]):.3f}"
+            for i, n in enumerate(["stress", "calm", "happy", "sad", "angry"])
+        )
+        _log(f"  Class weights: {weight_str}", log_file)
+
+        model = PhysiologicalNet(
+            d_model=config.d_model, n_heads=config.n_heads,
+            n_layers=config.n_layers, dropout=config.dropout,
+        ).to(device)
+
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+        )
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", patience=config.lr_patience,
+            factor=config.lr_factor, min_lr=config.min_lr,
+        )
+
+        best_f1, best_metrics, best_epoch = -1.0, None, 0
+        patience_counter = 0
+        eeg_mean, eeg_std = eeg_prep.get_stats()
+        gsr_mean, gsr_std = gsr_prep.get_stats()
+
+        for epoch in range(1, config.n_epochs + 1):
+            t0 = time.time()
+            train_loss, train_acc = train_one_epoch(
+                model, train_loader, optimizer, criterion, device, config.grad_clip
+            )
+            y_true, y_pred = evaluate(model, test_loader, device)
+            metrics        = compute_fold_metrics(y_true, y_pred)
+            val_f1         = metrics["macro_f1"]
+
+            scheduler.step(val_f1)
+            current_lr = optimizer.param_groups[0]["lr"]
+            is_best    = val_f1 > best_f1
+            marker     = "  [BEST]" if is_best else ""
+
+            _log(
+                f"  Epoch {epoch:3d}/{config.n_epochs} | "
+                f"loss={train_loss:.4f} | train_acc={train_acc:.4f} | "
+                f"val_F1={val_f1:.4f} | lr={current_lr:.3e} | "
+                f"{time.time() - t0:.1f}s{marker}",
+                log_file,
+            )
+
+            if is_best:
+                best_f1, best_metrics, best_epoch = val_f1, metrics, epoch
+                patience_counter = 0
+                torch.save({
+                    "model_state_dict": model.state_dict(),
+                    "eeg_mean": eeg_mean, "eeg_std": eeg_std,
+                    "gsr_mean": float(gsr_mean), "gsr_std": float(gsr_std),
+                    "config":   dataclasses.asdict(config),
+                    "metrics":  metrics,
+                    "epoch":    epoch,
+                    "eval_mode": "10fold_stratified",
+                    "fold_idx":  fold_idx,
+                }, os.path.join(config.checkpoint_dir, f"10fold_strat_fold{fold_idx + 1:02d}_best.pt"))
+            else:
+                patience_counter += 1
+                if patience_counter >= config.patience:
+                    _log(f"  Early stop at epoch {epoch}", log_file)
+                    break
+
+        _log(dash, log_file)
+        _log(
+            f"  Fold {fold_idx + 1} result: best macro-F1 = {best_f1:.4f} @ epoch {best_epoch}",
+            log_file,
+        )
+        _log(format_fold_report(best_metrics, fold_idx + 1, f"stratified_fold{fold_idx+1}"), log_file)
+        fold_results.append(best_metrics)
+
+    agg = aggregate_loso_metrics(fold_results)
+
+    summary = (
+        f"\n{'=' * 60}\n"
+        f"10-FOLD STRATIFIED KFOLD RESULTS (AlgoRidge-style)\n"
+        f"WARNING: within-subject leakage — inflated scores\n"
+        f"Use only for protocol comparison, not as primary metric\n"
+        f"{'=' * 60}\n"
+        f"Mean Macro-F1 : {agg['mean_macro_f1']:.4f} ± {agg['std_macro_f1']:.4f}  [COMPARISON]\n"
+        f"Mean Accuracy : {agg['mean_accuracy']:.4f} ± {agg['std_accuracy']:.4f}\n"
+        f"{'=' * 60}\n"
+        f"Per-class mean F1:\n"
+    )
+    for cls, f1 in agg["per_class_mean_f1"].items():
+        summary += f"  {cls:<8}: {f1:.4f}\n"
+    summary += f"{'=' * 60}"
+
+    _log(summary, log_file)
+
+    summary_path = os.path.join(config.log_dir, "10fold_stratified_summary.json")
+    _save_summary_json(agg, fold_results, [f"fold{i+1}" for i in range(10)], summary_path)
+    _log(f"\nSummary JSON: {summary_path}", log_file)
+    log_file.close()
+
+    print(summary)
+    print(f"\nLog     : {log_path}")
+    print(f"Summary : {summary_path}")
+    return agg
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -800,9 +1169,13 @@ def parse_args() -> argparse.Namespace:
         "--eval_mode",
         type    = str,
         default = "loso",
-        choices = ["loso", "random_split"],
-        help    = "loso: Leave-One-Subject-Out (rigorous, ~32%%) | "
-                  "random_split: 80/20 random split (demo model, ~50-55%%)",
+        choices = ["loso", "random_split", "5fold", "10fold"],
+        help    = (
+            "loso         : Leave-One-Subject-Out, 32 folds (most rigorous) | "
+            "5fold        : Subject-wise GroupKFold, 5 folds (cross-subject, faster) | "
+            "10fold       : Stratified KFold, 10 folds (within-subject, AlgoRidge-style) | "
+            "random_split : 80/20 random split (demo model)"
+        ),
     )
     return parser.parse_args()
 
@@ -838,6 +1211,20 @@ def main() -> None:
     if args.eval_mode == "random_split":
         print("\n[Eval mode: RANDOM SPLIT 80/20 — demo model]")
         train_random_split(
+            subject_data = subject_data,
+            config       = config,
+            device       = device,
+        )
+    elif args.eval_mode == "5fold":
+        print("\n[Eval mode: 5-FOLD SUBJECT GROUPKFOLD — cross-subject]")
+        train_5fold_group(
+            subject_data = subject_data,
+            config       = config,
+            device       = device,
+        )
+    elif args.eval_mode == "10fold":
+        print("\n[Eval mode: 10-FOLD STRATIFIED — within-subject (AlgoRidge-style)]")
+        train_10fold_stratified(
             subject_data = subject_data,
             config       = config,
             device       = device,
