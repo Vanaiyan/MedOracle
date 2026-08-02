@@ -119,11 +119,13 @@ def run_mlp_loso(subject_data: dict) -> None:
             hidden_layer_sizes=(256, 128),
             activation="relu",
             solver="adam",
-            max_iter=300,
+            max_iter=500,
             early_stopping=True,
             validation_fraction=0.1,
             random_state=42,
         )
+        # Change max_iter from 200 to 500
+
         mlp.fit(X_train, y_train)
         preds = mlp.predict(X_test)
 
