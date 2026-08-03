@@ -237,45 +237,6 @@ export default function Dashboard() {
                 Multimodal emotion recognition · SHAP explainability
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              {/* Demo emotion picker */}
-              <select
-                id="demo-emotion-select"
-                className="input"
-                value={demoEmotion}
-                onChange={e => setDemoEmotion(e.target.value)}
-                style={{ width: 'auto', minWidth: 130, cursor: 'pointer' }}
-              >
-                {EMOTIONS.map(e => (
-                  <option key={e} value={e}>
-                    {e.charAt(0).toUpperCase() + e.slice(1)}
-                  </option>
-                ))}
-              </select>
-              <button
-                id="run-prediction-btn"
-                className="btn btn-secondary"
-                onClick={runDemoPrediction}
-                disabled={runningPrediction}
-              >
-                {runningPrediction
-                  ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Running…</>
-                  : <>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round"><polygon points="6 3 20 12 6 21 6 3" /></svg>
-                    Run prediction
-                  </>}
-              </button>
-              <button
-                id="run-conflict-btn"
-                className="btn btn-primary"
-                onClick={runConflictPrediction}
-                disabled={runningPrediction}
-                title="Generate a session where physiology and video disagree"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
-                New conflict session
-              </button>
-            </div>
           </div>
 
           {/* Video upload panel */}
@@ -372,9 +333,6 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--color-neutral-600)' }}>
-              Tip: ready-made subjects (video + eeg.npy + gsr.npy) are in <code>data/synced_samples/</code>.
-            </p>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10 }}>
               <button
