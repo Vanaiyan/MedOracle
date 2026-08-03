@@ -14,7 +14,7 @@ Video         (M2) : au_smile, au_brow, au_eye, head_pose, face_valence
 can be attributed.  Member 2's real ResNet50+BiLSTM head / Member 1's
 attention network implement this later; nothing in the engine changes.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

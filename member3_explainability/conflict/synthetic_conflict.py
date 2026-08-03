@@ -13,7 +13,7 @@ fused confidence, and modality_weights are all computed by re-running the
 gate (conflict/gate.py) on the per-modality predictions, so the dict is
 exactly what Member 2's pipeline would emit for that conflict.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

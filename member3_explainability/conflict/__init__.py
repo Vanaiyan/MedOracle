@@ -4,7 +4,7 @@ member3_explainability/conflict
 Trust-Aware Modality-Conflict Explanation for Quality-Gated
 Multimodal Emotion Recognition.
 
-This package is the novel research contribution of Member 3 (Adshaya).
+
 It sits on top of the existing SHAP layer and the M2 -> M3 prediction_output
 contract, and answers three questions the base system cannot:
 
@@ -15,7 +15,7 @@ contract, and answers three questions the base system cannot:
 It also produces counterfactuals over the quality/gate variables
 ("if EEG signal quality had been good, the decision would flip to stress").
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from member3_explainability.conflict.conflict_explainer import (

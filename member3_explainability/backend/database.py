@@ -6,7 +6,7 @@ SQLAlchemy async engine + session factory.
 Dev  : SQLite  (no setup needed — auto-created as medoracle.db)
 Prod : PostgreSQL via DATABASE_URL env var
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

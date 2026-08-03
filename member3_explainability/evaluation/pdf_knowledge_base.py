@@ -22,7 +22,7 @@ Facts from knowledge_base.py into a single Retriever, so a query can surface
 either a hand-verified one-liner or a real excerpt from the source paper,
 whichever matches best.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

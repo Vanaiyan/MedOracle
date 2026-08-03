@@ -39,7 +39,7 @@ discrete real-world grades assessed once from the raw signal (face-detection
 rate, amplitude thresholds, etc.), not something IG differentiates through --
 same treatment kernel_shap.py already gives them.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

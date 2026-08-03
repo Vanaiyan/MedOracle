@@ -10,7 +10,7 @@ not change its behaviour.
 This check is pure numpy/python (no torch needed), so it can run anywhere,
 including CI, without the heavy dependency.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

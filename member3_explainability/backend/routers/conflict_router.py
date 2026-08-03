@@ -10,9 +10,9 @@ attribution, counterfactuals, and a hallucination-verified natural-language
 explanation (RAG-grounded; Claude if an API key is set, else the verified
 template).
 
-Stateless compute endpoint (no DB) so it composes cleanly with /predict.
 
-Author : Adshaya Balarajah (214024V)
+
+
 """
 
 from __future__ import annotations

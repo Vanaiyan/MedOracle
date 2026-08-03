@@ -3,12 +3,11 @@ member3_explainability/backend/main.py
 =======================================
 FastAPI application entry point.
 
-Run with:
-    uvicorn member3_explainability.backend.main:app --reload --port 8000
+
 
 All routes except /auth/* require a valid JWT Bearer token.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

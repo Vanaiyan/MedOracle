@@ -51,7 +51,7 @@ export default function IGAttributionPanel({ igAttribution }) {
           height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: 'var(--color-neutral-600)', fontSize: 13, textAlign: 'center', padding: '0 1rem',
         }}>
-          Not available for this session. Real IG needs raw EEG + GSR + video —
+          Not available for this session. Real IG needs EEG + GSR + video —
           run <strong>Multimodal fusion</strong> with all three files to see it here.
         </div>
       </div>
@@ -59,7 +59,7 @@ export default function IGAttributionPanel({ igAttribution }) {
   }
 
   const {
-    modality_totals = {}, eeg_channel_importance = {},
+    modality_totals = {}, eeg_channel_importance = {}, gsr_importance = 0,
     video_frame_importance = {}, completeness_check, target_emotion,
   } = igAttribution;
 
@@ -70,7 +70,7 @@ export default function IGAttributionPanel({ igAttribution }) {
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
   const videoEntries = Object.entries(video_frame_importance)
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-  const maxEeg = Math.max(...eegEntries.map(([, v]) => Math.abs(v)), 1e-9);
+  const maxEeg = Math.max(...eegEntries.map(([, v]) => Math.abs(v)), Math.abs(gsr_importance), 1e-9);
   const maxVideo = Math.max(...videoEntries.map(([, v]) => Math.abs(v)), 1e-9);
 
   const gap = completeness_check?.gap;
@@ -133,7 +133,10 @@ export default function IGAttributionPanel({ igAttribution }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginTop: 14 }}>
           <div>
             <div style={{ fontSize: 12, color: 'var(--color-neutral-600)', marginBottom: 8 }}>
-              EEG channels ({eegEntries.length})
+              EEG channels ({eegEntries.length}) + GSR
+            </div>
+            <div style={{ paddingBottom: 6, marginBottom: 6, borderBottom: '1px dashed var(--color-divider)' }}>
+              <MiniBar label="GSR" value={gsr_importance} max={maxEeg} color={MODALITY_COLORS.physio} />
             </div>
             <div style={{ maxHeight: 220, overflowY: 'auto', paddingRight: 4 }}>
               {eegEntries.map(([ch, v]) => (

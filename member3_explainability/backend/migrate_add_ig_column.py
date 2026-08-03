@@ -15,11 +15,7 @@ frontend already handles gracefully).
 Safe to run multiple times -- it checks whether the column already exists
 first.
 
-Usage
------
-    python -m member3_explainability.backend.migrate_add_ig_column
 
-Author : Adshaya Balarajah (214024V)
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ what we measure (hallucination down, groundedness up, RAG on vs off).
 
 Each fact has: id, text, tags (for retrieval), and a citation.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

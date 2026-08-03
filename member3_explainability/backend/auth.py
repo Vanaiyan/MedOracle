@@ -11,7 +11,7 @@ Tokens
 Secret key is read from the JWT_SECRET env var.
 Algorithm : HS256.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

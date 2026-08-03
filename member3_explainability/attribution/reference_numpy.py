@@ -12,7 +12,7 @@ with zero heavy deps so it can be run/validated before torch is installed:
 The winning method is selected by measured faithfulness -- the data-backed
 answer to "why not just SHAP?".
 
-Author : Adshaya Balarajah (214024V)
+
 """
 from __future__ import annotations
 from itertools import combinations

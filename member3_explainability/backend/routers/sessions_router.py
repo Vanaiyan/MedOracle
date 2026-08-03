@@ -4,7 +4,7 @@ member3_explainability/backend/routers/sessions_router.py
 GET /sessions        — list all sessions for authenticated user
 GET /sessions/{id}   — detailed session with full SHAP breakdown
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

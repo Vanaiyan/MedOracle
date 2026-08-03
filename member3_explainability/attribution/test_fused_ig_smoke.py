@@ -20,7 +20,7 @@ What it checks
 
 Usage
 -----
-    python -m member3_explainability.attribution.test_fused_ig_smoke
+    
 
 Needs a real video file to fully exercise the video branch -- pass one:
     python -m member3_explainability.attribution.test_fused_ig_smoke path/to/clip.mp4
@@ -28,7 +28,7 @@ Needs a real video file to fully exercise the video branch -- pass one:
 Without a video file, it uses random frames shaped like real ones (still
 exercises the full IG code path and shapes, just not real facial content).
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

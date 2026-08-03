@@ -3,7 +3,7 @@ member3_explainability/backend/routers/dashboard_router.py
 ===========================================================
 GET /dashboard/summary — aggregated user statistics
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

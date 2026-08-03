@@ -9,7 +9,7 @@ Methods
 * Kernel SHAP           (BASELINE)  — captum.KernelShap
 * Intrinsic attention   (CORROB.)   — model's own attention gate
 
-Faithfulness (comprehensiveness)
+Faithfulness
 --------------------------------
 For a given attribution, remove (set to baseline) the top-k most important
 features and measure the DROP in the target-class probability.  A faithful
@@ -17,10 +17,9 @@ explanation points at features the model actually relies on, so removing them
 should cut the probability sharply.  We report comprehensiveness averaged over
 k = 1..K-1; higher = more faithful.
 
-This makes "why Integrated Gradients over SHAP?" a measured result, not a
-default — the exact rebuttal to the interim-evaluation question.
 
-Author : Adshaya Balarajah (214024V)
+
+
 """
 
 from __future__ import annotations

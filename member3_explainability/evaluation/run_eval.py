@@ -19,7 +19,7 @@ The LLM chatbot (llm_chatbot.py) plugs in as another "explanation source" whose
 output is scored by exactly these metrics; here we use the template + a
 corrupted variant so the harness is fully runnable offline.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations
