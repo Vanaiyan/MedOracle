@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page {
+    size: 420mm 594mm;   /* A2 portrait */
+    margin: 0;
+  }
+  :root{
+    --navy:#0D1B2A;
+    --teal:#028090;
+    --accent:#02C39A;
+    --bg:#F2F8FA;
+    --ink:#12222E;
+    --line:#CBDDE3;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{
+    width:420mm; height:594mm;
+    font-family:"Liberation Sans","DejaVu Sans",sans-serif;
+    color:var(--ink);
+    background:var(--bg);
+  }
+  .poster{
+    width:420mm; height:594mm;
+    padding:8mm;
+  }
+  .poster > *{ margin-bottom:3.5mm; }
+  .poster > *:last-child{ margin-bottom:0; }
+
+  /* ---------- shared blocks ---------- */
+  .card{
+    background:#ffffff;
+    border:0.6mm solid var(--line);
+    border-radius:3mm;
+    padding:5mm;
+  }
+  .sec-title{
+    font-size:19pt;
+    font-weight:bold;
+    color:#ffffff;
+    background:var(--teal);
+    padding:2.2mm 4mm;
+    border-radius:2mm;
+    margin-bottom:4mm;
+    letter-spacing:0.2pt;
+  }
+  ul{ list-style:none; }
+  li{
+    font-size:13pt;
+    line-height:1.3;
+    padding-left:6mm;
+    position:relative;
+    margin-bottom:2mm;
+  }
+  li::before{
+    content:"";
+    position:absolute; left:0; top:2.3mm;
+    width:2.6mm; height:2.6mm;
+    background:var(--accent);
+    border-radius:0.6mm;
+    transform:rotate(45deg);
+  }
+  .cap{
+    font-size:10.5pt; font-style:italic; color:#5A6B74;
+    margin-top:1.5mm; text-align:center; line-height:1.22;
+  }
+  img.fig{ width:100%; height:auto; display:block; border:0.4mm solid var(--line); border-radius:1.5mm; background:#fff; }
+  img.arch{ width:auto; max-width:100%; max-height:48mm; margin:0 auto; }
+  img.tall{ width:auto; max-width:100%; max-height:38mm; margin:0 auto; }
+  .mod img.fig{ max-height:32mm; width:auto; max-width:100%; margin:0 auto; }
+
+  /* ---------- header ---------- */
+  .header{
+    background:var(--navy);
+    border-radius:3mm;
+    padding:6mm 10mm;
+    color:#fff;
+    text-align:center;
+  }
+  .header h1{
+    font-size:33pt; line-height:1.08; font-weight:bold; letter-spacing:0.2pt;
+  }
+  .header .sub{
+    margin-top:4mm; font-size:16pt; color:#B9E8DE;
+  }
+  .header .sub b{ color:var(--accent); }
+  .header .accentbar{
+    height:1.6mm; width:60mm; background:var(--accent);
+    margin:5mm auto 0; border-radius:1mm;
+  }
+
+  /* ---------- row2 ---------- */
+  .row2{ display:flex; gap:5mm; }
+  .row2 .left{ flex:1; }
+  .row2 .right{ flex:1.15; }
+  .aim-line{
+    font-size:13.5pt; line-height:1.32; margin-bottom:3.5mm;
+    background:var(--bg); border-left:1.6mm solid var(--accent);
+    padding:3mm 4mm; border-radius:1.5mm;
+  }
+  .aim-line b{ color:var(--teal); }
+  .sub-h{ font-size:14pt; font-weight:bold; color:var(--navy); margin-bottom:2.5mm; }
+
+  /* ---------- row3 modules ---------- */
+  .row3{ display:flex; gap:5mm; align-items:stretch; }
+  .mod{ flex:1; }
+  .mod-head{
+    background:var(--navy); color:#fff; border-radius:2.5mm 2.5mm 0 0;
+    padding:3.4mm 4mm 3mm;
+  }
+  .mod-head .num{ font-size:11.5pt; color:var(--accent); font-weight:bold; letter-spacing:1pt; }
+  .mod-head .name{ font-size:15pt; font-weight:bold; line-height:1.1; margin-top:1mm; }
+  .mod-head .desc{ font-size:10.3pt; line-height:1.26; color:#CFE6E1; margin-top:2mm; }
+  .mod-body{
+    background:#fff; border:0.6mm solid var(--line); border-top:0;
+    border-radius:0 0 2.5mm 2.5mm; padding:3.8mm;
+  }
+  .mini-h{
+    font-size:12.5pt; font-weight:bold; color:var(--teal);
+    text-transform:uppercase; letter-spacing:0.4pt;
+    margin:2.6mm 0 2mm; padding-bottom:1mm;
+    border-bottom:0.5mm solid var(--line);
+  }
+  .mini-h:first-child{ margin-top:0; }
+  .mod li{ font-size:10.8pt; margin-bottom:1.6mm; padding-left:5mm; line-height:1.26; }
+  .mod li::before{ top:1.7mm; width:2.2mm; height:2.2mm; }
+  .stat{
+    background:var(--bg); border-radius:1.8mm; padding:2mm 3mm;
+    margin-bottom:1.6mm;
+  }
+  .stat .k{ font-size:10.5pt; color:#5A6B74; line-height:1.2; }
+  .stat .v{ font-size:16pt; font-weight:bold; color:var(--navy); }
+  .stat .v.big{ font-size:20pt; color:var(--teal); }
+  .mockup-note{ font-size:9.5pt; color:#B23A2E; font-weight:bold; text-align:center; margin-top:1.5mm; }
+
+  /* ---------- row4 ---------- */
+  .row4{ display:flex; gap:5mm; }
+  .row4 .concl{ flex:1.1; }
+  .row4 .outcomes{ flex:1; background:var(--navy); color:#fff; }
+  .row4 .outcomes .sec-title{ background:var(--accent); color:var(--navy); }
+  .concl p{ font-size:13pt; line-height:1.4; }
+  .outcomes li{ color:#EAF6F3; font-size:12.5pt; }
+  .outcomes li::before{ background:var(--accent); }
+  .outcomes li b{ color:var(--accent); font-size:14pt; }
+
+  /* ---------- footer ---------- */
+  .footer{
+    background:var(--teal); color:#fff; border-radius:3mm;
+    padding:4mm 8mm; display:flex; justify-content:space-between; align-items:center;
+    font-size:11.5pt;
+  }
+  .footer .uni b{ font-size:13pt; }
+  .footer .members{ text-align:right; line-height:1.5; }
+  .footer .members b{ color:var(--navy); }
+</style>
+</head>
+<body>
+<div class="poster">
+
+  <!-- HEADER -->
+  <div class="header">
+    <h1>AI-Driven Multimodal Emotional Recognition System with Explainability</h1>
+    <div class="sub">Group Name: <b>MedOracle</b> &nbsp;&bull;&nbsp; Group Number: <b>36</b></div>
+    <div class="accentbar"></div>
+  </div>
+
+  <!-- ROW 2 -->
+  <div class="row2">
+    <div class="left card">
+      <div class="sec-title">Problem in Brief</div>
+      <ul>
+        <li>Mental health assessment still relies mainly on subjective self-report; continuous, objective measurement is limited.</li>
+        <li>Single-modality tools (a camera OR a wearable, never both) inherit that one channel's blind spots &mdash; a face can be controlled, physiology cannot, but physiology varies heavily between people.</li>
+        <li>Existing multimodal systems assume every input is always present and equally reliable, and fuse with fixed weights that cannot adapt when a sensor is degraded or missing.</li>
+        <li>The two best available datasets for physiological (DEAP) and facial-video (CREMA-D) emotion recognition share no common subjects &mdash; genuine multimodal fusion cannot be trained or evaluated the usual way.</li>
+      </ul>
+    </div>
+    <div class="right card">
+      <div class="sec-title">Aim &amp; Objectives</div>
+      <div class="aim-line"><b>Aim:</b> To design, implement and rigorously evaluate a multimodal emotion recognition system that fuses physiological (EEG/GSR) and facial-video signals through a quality-aware gated fusion mechanism, and to make its predictions explainable through SHAP.</div>
+      <div class="sub-h">Objectives</div>
+      <ul>
+        <li>Physiological emotion recognition via a bidirectional cross-modal attention network (DEAP).</li>
+        <li>Video emotion recognition via ResNet50 + BiLSTM, evaluated actor-independently (CREMA-D).</li>
+        <li>A quality-aware gated fusion mechanism with graceful degradation, verified by automated testing.</li>
+        <li>SHAP-based explainability + a FastAPI/React web app accepting real multimodal input.</li>
+        <li>An 8-condition ablation study with statistical significance testing &mdash; reporting all results honestly, including unfavourable ones.</li>
+      </ul>
+      <img class="fig arch" src="fig_architecture.png" alt="System architecture" style="margin-top:4mm;">
+      <div class="cap">System architecture &mdash; physiological and video branches fused via quality-aware gating, explained via SHAP</div>
+    </div>
+  </div>
+
+  <!-- ROW 3 -->
+  <div class="row3">
+
+    <!-- MODULE 01 -->
+    <div class="mod">
+      <div class="mod-head">
+        <div class="num">MODULE 01</div>
+        <div class="name">Physiological Emotion Recognition</div>
+        <div class="desc">Bidirectional cross-modal attention network over EEG (32-channel) and GSR, trained on DEAP, evaluated honestly under Leave-One-Subject-Out cross-validation.</div>
+      </div>
+      <div class="mod-body">
+        <div class="mini-h">Methodology</div>
+        <img class="fig" src="fig4_1_m1_pipeline.png" alt="Module 1 pipeline">
+        <div class="cap">Module 01 pipeline &mdash; EEG/GSR preprocessing to bidirectional attention classifier</div>
+
+        <div class="mini-h">Evaluation &amp; Results</div>
+        <img class="fig tall" src="fig7_3_deap_distribution.png" alt="DEAP class distribution">
+        <div class="cap">DEAP class distribution &mdash; severe imbalance, only 2.6% happy</div>
+        <div class="stat" style="margin-top:2.5mm;"><span class="k">LOSO macro-F1 (honest, subject-independent)</span><br><span class="v big">0.179</span></div>
+        <div class="stat"><span class="k">Random-split macro-F1 (optimistic baseline)</span><br><span class="v">0.417</span></div>
+        <ul><li>Root cause diagnosed via 4 controlled experiments &mdash; traced to class imbalance and cross-subject EEG variability, NOT a feature-engineering or implementation defect.</li></ul>
+
+        <div class="mini-h">Key Features</div>
+        <ul>
+          <li>Bidirectional cross-modal attention (EEG &harr; GSR).</li>
+          <li>Signal-quality grading (good/degraded/poor) feeding directly into system-level fusion.</li>
+          <li>Honest dual-protocol evaluation (random-split vs LOSO).</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- MODULE 02 -->
+    <div class="mod">
+      <div class="mod-head">
+        <div class="num">MODULE 02</div>
+        <div class="name">Video Recognition + Gated Fusion</div>
+        <div class="desc">YOLOv8 face detection (quality grading only) &rarr; partially fine-tuned ResNet50 &rarr; BiLSTM &rarr; 5-class softmax, fused with Module 01 via an adaptive, confidence-and-quality-aware gate.</div>
+      </div>
+      <div class="mod-body">
+        <div class="mini-h">Methodology</div>
+        <img class="fig" src="fig4_2_m2_pipeline.png" alt="Module 2 pipeline">
+        <div class="cap">Module 02 pipeline &mdash; video recognition branch and gated fusion with physiological output</div>
+
+        <div class="mini-h">Evaluation &amp; Results</div>
+        <img class="fig" src="fig_ablation_bar.png" alt="Ablation study">
+        <div class="cap">Ablation study &mdash; fusion (C5) significantly beats both single modalities</div>
+        <div class="stat" style="margin-top:2.5mm;"><span class="k">Video held-out macro-F1 (best fold: 0.6615)</span><br><span class="v big">0.6486</span></div>
+        <div class="stat"><span class="k">Fusion vs physio-only / video-only (Wilcoxon)</span><br><span class="v">p &lt; 0.001</span></div>
+        <ul><li>Full-frame input outperforms YOLO-cropped face input (0.70 vs 0.56 macro-F1) &mdash; a genuine empirical finding from this project.</li></ul>
+
+        <div class="mini-h">Key Features</div>
+        <ul>
+          <li>Actor-independent cross-validation (no actor overlap train/test).</li>
+          <li>Entropy-based confidence &times; signal-quality penalty &rarr; L1-normalised fusion weights.</li>
+          <li>Graceful degradation: falls back cleanly to a single modality when the other is missing/poor (verified by robustness tests).</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- MODULE 03 -->
+    <div class="mod">
+      <div class="mod-head">
+        <div class="num">MODULE 03</div>
+        <div class="name">Explainability + Web Application</div>
+        <div class="desc">Kernel SHAP over the fused prediction, served through a FastAPI backend (9 endpoints, JWT auth) and a React dashboard with a novel modality-conflict explanation panel and an LLM-backed chatbot.</div>
+      </div>
+      <div class="mod-body">
+        <div class="mini-h">Methodology</div>
+        <img class="fig" src="fig4_3_m3_pipeline.png" alt="Module 3 pipeline">
+        <div class="cap">Module 03 pipeline &mdash; SHAP explainability layer, FastAPI backend and React dashboard</div>
+
+        <div class="mini-h">Evaluation &amp; Results</div>
+        <img class="fig tall" src="mockup_dashboard_placeholder.png" alt="Dashboard UI mockup (placeholder)">
+        <div class="cap">React dashboard layout</div>
+        <div class="mockup-note">&#9888; UI MOCKUP &mdash; not a real screenshot; to be replaced before printing</div>
+        <div class="stat" style="margin-top:2.5mm;"><span class="k">Automated tests passing (fusion, pipeline, harmonisation, HTTP)</span><br><span class="v big">82</span></div>
+        <div class="stat"><span class="k">REST API endpoints, real multimodal upload end-to-end</span><br><span class="v">9</span></div>
+
+        <div class="mini-h">Key Features</div>
+        <ul>
+          <li>Kernel SHAP + faithfulness scoring (perturbation-based).</li>
+          <li>Modality-conflict panel &mdash; explains physio/video disagreements using the fusion gate's own reasoning.</li>
+          <li>Real file upload: video + EEG + GSR &rarr; fused, explained prediction.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ROW 4 -->
+  <div class="row4">
+    <div class="concl card">
+      <div class="sec-title">Conclusion</div>
+      <p>MedOracle demonstrates a working, honestly-evaluated multimodal emotion recognition system. Its quality-aware gated fusion significantly outperforms any single modality and degrades gracefully when a sensor is unreliable &mdash; precisely the scenario a real deployment must handle. Where a component (the physiological module, under strict subject-independent evaluation) falls short, this project treats that as a rigorously diagnosed finding rather than a hidden weakness, and shows the system is explicitly designed to remain robust to it.</p>
+    </div>
+    <div class="outcomes card">
+      <div class="sec-title">Key Results / Outcomes</div>
+      <ul>
+        <li>Video module generalises to unseen actors: <b>0.6486 macro-F1</b>, near-zero train/test gap.</li>
+        <li>Multimodal fusion significantly outperforms either single modality (<b>p &lt; 0.001</b>, Wilcoxon signed-rank).</li>
+        <li>System degrades gracefully under missing/poor signal quality &mdash; verified, not assumed.</li>
+        <li>Physiological module's honest limitation (<b>LOSO 0.179</b>) is diagnosed with evidence via four controlled experiments &mdash; not hidden.</li>
+        <li><b>82/82</b> automated tests passing; full working web app with real multimodal upload.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <div class="uni">
+      <b>University of Moratuwa</b> &mdash; Faculty of Information Technology<br>
+      BSc (Hons) in Information Technology &nbsp;&bull;&nbsp; Supervisor: Dr. Firdhous M.F.M.
+    </div>
+    <div class="members">
+      <b>214206G</b> Suhira Balarajan &nbsp;&bull;&nbsp; <b>214215H</b> Vanaiyan Kirupagaran<br>
+      <b>214024V</b> Adshaya Balarajah
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

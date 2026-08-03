@@ -1,18 +1,4 @@
 """
-member2_video_fusion/preprocessing/multi_corpus_dataset.py
-===========================================================
-MedOracle — Member 2 (Vanaiyan Kirupagaran, 214215H)
-
-MultiCorpusDataset: unified PyTorch Dataset for CREMA-D + RAVDESS,
-loading from pre-extracted .npy frame files.
-
-Why .npy instead of decoding video at runtime
-----------------------------------------------
-Both datasets store each clip as a (16, 224, 224, 3) uint8 numpy array
-on disk. Compared to video-decode + YOLO detection at training time,
-.npy loading is ~10× faster, removes the GPU/CPU contention from YOLO,
-and makes training speed predictable.
-
 Manifest format
 ---------------
 A unified CSV with columns:
@@ -27,24 +13,6 @@ Actor ID namespacing (avoids GroupKFold collision)
     CREMA-D actors  : 1001–1091  (original 4-digit IDs)
     RAVDESS actors  : 2001–2024  (original 1–24 offset by +2000)
     No overlap guaranteed.
-
-Augmentation (training only, applied identically to all T=16 frames)
----------------------------------------------------------------------
-    1. Random horizontal flip          (p=0.5)
-    2. Color jitter: brightness ±30%, contrast ±30%, saturation ±30%
-       (drawn once per clip, applied to every frame via HSV transform)
-    3. Random rotation ±10°
-       (BORDER_REFLECT fill avoids black corner artefacts)
-    4. Random erasing / cutout         (p=0.5, 2–20% of frame area)
-       Occludes a random patch (same box across all frames) to break
-       actor-identity shortcuts and force the model onto expression cues.
-       Reference: Zhong et al. (2020), "Random Erasing Data Augmentation".
-
-Key: __getitem__ returns dict with key "clip" (not "frames") to match
-     the training loop convention used throughout train.py and
-     colab_block13_training.py.
-
-Author: Vanaiyan Kirupagaran (214215H)
 """
 
 from __future__ import annotations
