@@ -15,23 +15,20 @@ class GSRPreprocessor:
         self._std:  Optional[float] = None
         self._fitted = False
 
-    # ------------------------------------------------------------------
-    # Fit
-    # ------------------------------------------------------------------
+    # Fit ------------------------------------------------------------------
 
     def fit(self, gsr_windows: np.ndarray) -> "GSRPreprocessor":
 
         if gsr_windows.ndim == 1:
-            gsr_windows = gsr_windows[np.newaxis, :]   # (1, 512)
+            gsr_windows = gsr_windows[np.newaxis, :] 
 
         assert gsr_windows.ndim == 2 and gsr_windows.shape[1] == WINDOW_SAMPLES, \
             f"Expected shape (N, 512), got {gsr_windows.shape}"
 
-        # Apply within-window baseline subtraction first (mirrors transform step 1)
-        window_mean  = gsr_windows.mean(axis=1, keepdims=True)   # (N, 1)
-        gsr_centered = gsr_windows - window_mean                  # (N, 512)
+        window_mean  = gsr_windows.mean(axis=1, keepdims=True)   
+        gsr_centered = gsr_windows - window_mean                 
 
-        flat       = gsr_centered.ravel()   # all baseline-corrected samples
+        flat       = gsr_centered.ravel()   
         self._mean = float(flat.mean())
         self._std  = float(flat.std())
         if self._std < EPSILON:
@@ -45,9 +42,7 @@ class GSRPreprocessor:
         self._fitted = True
         return self
 
-    # ------------------------------------------------------------------
-    # Transform
-    # ------------------------------------------------------------------
+    # Transform ------------------------------------------------------------------
 
     def transform(self, gsr: np.ndarray) -> np.ndarray:
 
@@ -56,15 +51,13 @@ class GSRPreprocessor:
 
         single = (gsr.ndim == 1)
         if single:
-            gsr = gsr[np.newaxis, :]   # (1, 512)
+            gsr = gsr[np.newaxis, :]   
 
         gsr = gsr.astype(np.float32)
 
-        # Step 1: remove within-window mean (tonic offset)
-        window_mean = gsr.mean(axis=1, keepdims=True)   # (N, 1)
+        window_mean = gsr.mean(axis=1, keepdims=True)   
         gsr = gsr - window_mean
-
-        # Step 2: z-score with subject statistics
+        
         gsr = (gsr - self._mean) / self._std
 
         if single:
@@ -74,9 +67,7 @@ class GSRPreprocessor:
     def fit_transform(self, gsr_windows: np.ndarray) -> np.ndarray:
         return self.fit(gsr_windows).transform(gsr_windows)
 
-    # ------------------------------------------------------------------
-    # Save / load
-    # ------------------------------------------------------------------
+    # Save / load------------------------------------------------------------------
 
     def get_stats(self) -> Tuple[float, float]:
         if not self._fitted:
@@ -94,10 +85,7 @@ class GSRPreprocessor:
         instance.load_stats(float(data["gsr_mean"]), float(data["gsr_std"]))
         return instance
 
-
-# ---------------------------------------------------------------------------
-# Convenience function
-# ---------------------------------------------------------------------------
+# Convenience function ---------------------------------------------------------------------------
 
 def normalize_gsr_batch(
     gsr:  np.ndarray,
@@ -109,10 +97,7 @@ def normalize_gsr_batch(
     prep.load_stats(mean, std)
     return prep.transform(gsr)
 
-
-# ---------------------------------------------------------------------------
-# Self-test
-# ---------------------------------------------------------------------------
+# For my testing purpose---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     rng = np.random.default_rng(42)

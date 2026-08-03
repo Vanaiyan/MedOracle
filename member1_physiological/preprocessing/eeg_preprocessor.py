@@ -4,51 +4,33 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-
-# ---------------------------------------------------------------------------
-# Preprocessing parameters
-# ---------------------------------------------------------------------------
-
 EEG_CHANNELS   = 32
-WINDOW_SAMPLES = 512   # 4 s × 128 Hz
-EPSILON        = 1e-8  # avoid division by zero in z-score
-
-
-# ---------------------------------------------------------------------------
-# Main class
-# ---------------------------------------------------------------------------
+WINDOW_SAMPLES = 512   
+EPSILON        = 1e-8 
 
 class EEGPreprocessor:
 
     def __init__(self):
-        self._mean: Optional[np.ndarray] = None   # shape (32,)
-        self._std:  Optional[np.ndarray] = None   # shape (32,)
+        self._mean: Optional[np.ndarray] = None   
+        self._std:  Optional[np.ndarray] = None   
         self._fitted = False
-
-    # ------------------------------------------------------------------
-    # Fit (training only)
-    # ------------------------------------------------------------------
 
     def fit(self, eeg_windows: np.ndarray) -> "EEGPreprocessor":
 
         if eeg_windows.ndim == 2:
-            # Single window (32, 512) → add batch dimension
             eeg_windows = eeg_windows[np.newaxis, ...]
 
         assert eeg_windows.ndim == 3 and eeg_windows.shape[1] == EEG_CHANNELS, \
             f"Expected shape (N, 32, 512), got {eeg_windows.shape}"
 
-        # Step 1: apply within-window baseline subtraction (same as in transform)
-        # We MUST compute statistics on baseline-subtracted data to match transform()
-        window_mean = eeg_windows.mean(axis=2, keepdims=True)  # (N, 32, 1)
-        eeg_centered = eeg_windows - window_mean               # (N, 32, 512) — baseline removed
+        window_mean = eeg_windows.mean(axis=2, keepdims=True) 
+        eeg_centered = eeg_windows - window_mean              
 
-        # Flatten across windows and time: shape (32, N*512)
         flat = eeg_centered.transpose(1, 0, 2).reshape(EEG_CHANNELS, -1)
 
-        self._mean = flat.mean(axis=1)   # (32,)
-        self._std  = flat.std(axis=1)    # (32,)
-        self._std  = np.where(self._std < EPSILON, EPSILON, self._std)  # avoid /0
+        self._mean = flat.mean(axis=1)   
+        self._std  = flat.std(axis=1)    
+        self._std  = np.where(self._std < EPSILON, EPSILON, self._std)  
         self._fitted = True
         return self
 
@@ -61,9 +43,7 @@ class EEGPreprocessor:
         self._fitted = True
         return self
 
-    # ------------------------------------------------------------------
-    # Transform
-    # ------------------------------------------------------------------
+    # Transform------------------------------------------------------------------
 
     def transform(self, eeg: np.ndarray) -> np.ndarray:
 
@@ -75,24 +55,19 @@ class EEGPreprocessor:
 
         single = (eeg.ndim == 2)
         if single:
-            eeg = eeg[np.newaxis, ...]   # (1, 32, 512)
+            eeg = eeg[np.newaxis, ...]
 
         eeg = eeg.astype(np.float32)
 
-        # Step 1: subtract within-window per-channel mean
-        # This removes slow DC drifts specific to this 4-second segment
-        # Shape operations: mean over axis=2 (time) → (N, 32) → unsqueeze → (N, 32, 1)
-        window_mean = eeg.mean(axis=2, keepdims=True)   # (N, 32, 1)
+        window_mean = eeg.mean(axis=2, keepdims=True) 
         eeg = eeg - window_mean
 
-        # Step 2 & 3: z-score using subject-level statistics
-        # _mean shape (32,) → reshape to (1, 32, 1) for broadcasting
-        mean = self._mean.astype(np.float32)[np.newaxis, :, np.newaxis]  # (1, 32, 1)
-        std  = self._std.astype(np.float32)[np.newaxis, :, np.newaxis]   # (1, 32, 1)
+        mean = self._mean.astype(np.float32)[np.newaxis, :, np.newaxis]  
+        std  = self._std.astype(np.float32)[np.newaxis, :, np.newaxis]   
         eeg  = (eeg - mean) / std
 
         if single:
-            eeg = eeg[0]  # back to (32, 512)
+            eeg = eeg[0] 
 
         return eeg
 
@@ -100,9 +75,7 @@ class EEGPreprocessor:
         """Convenience: fit on eeg_windows then return transformed version."""
         return self.fit(eeg_windows).transform(eeg_windows)
 
-    # ------------------------------------------------------------------
-    # Save / load stats
-    # ------------------------------------------------------------------
+    # Save / load stats ------------------------------------------------------------------
 
     def get_stats(self) -> Tuple[np.ndarray, np.ndarray]:
 
@@ -124,10 +97,7 @@ class EEGPreprocessor:
         instance.load_stats(data["eeg_mean"], data["eeg_std"])
         return instance
 
-
-# ---------------------------------------------------------------------------
-# Convenience function (stateless — normalises a batch using given stats)
-# ---------------------------------------------------------------------------
+# Convenience function --------------------------------------------------------------------------
 
 def normalize_eeg_batch(
     eeg: np.ndarray,
@@ -140,9 +110,7 @@ def normalize_eeg_batch(
     return prep.transform(eeg)
 
 
-# ---------------------------------------------------------------------------
-# Quick self-test
-# ---------------------------------------------------------------------------
+# for my testing purposes —--------------------------------------------------------------------------
 
 if __name__ == "__main__":
     rng = np.random.default_rng(42)

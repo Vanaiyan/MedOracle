@@ -1,6 +1,4 @@
 """
-member1_physiological/predict.py
-================================
 Inference module for PhysiologicalNet.
 
 Loads a trained checkpoint and predicts the emotion class for a single
@@ -36,8 +34,6 @@ Usage:
         --checkpoint_dir member1_physiological/checkpoints ^
         --dat_file data/DEAP/s01.dat ^
         --trial 0 --window 0
-
-Author: Suhira Balarajan (214206G)
 """
 
 from __future__ import annotations

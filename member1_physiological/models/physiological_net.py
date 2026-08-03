@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from .encoders  import EEGEncoder, GSREncoder, D_MODEL
 from .attention import BidirectionalCrossModalAttention
 
-# Locked emotion classes (NEVER change order)
 EMOTION_CLASSES = {
     "stress": 0,
     "calm":   1,
@@ -17,20 +16,17 @@ EMOTION_CLASSES = {
     "sad":    3,
     "angry":  4,
 }
-N_CLASSES = len(EMOTION_CLASSES)   # 5
+N_CLASSES = len(EMOTION_CLASSES) 
 
-
-# ---------------------------------------------------------------------------
-# Classification Head
-# ---------------------------------------------------------------------------
+# Classification Head---------------------------------------------------------------------------
 
 class ClassificationHead(nn.Module):
 
     def __init__(
         self,
-        in_features: int = 2 * D_MODEL,    # 256
+        in_features: int = 2 * D_MODEL,    
         hidden_dim : int = 128,
-        n_classes  : int = N_CLASSES,      # 5
+        n_classes  : int = N_CLASSES,      
         dropout    : float = 0.4,
     ):
         super().__init__()
@@ -47,27 +43,24 @@ class ClassificationHead(nn.Module):
         x = self.fc2(x)
         return x
 
-
-# ---------------------------------------------------------------------------
-# Full Network
-# ---------------------------------------------------------------------------
+# Full Network ---------------------------------------------------------------------------
 
 class PhysiologicalNet(nn.Module):
 
     def __init__(
         self,
-        d_model  : int = D_MODEL,   # 128
+        d_model  : int = D_MODEL,  
         n_heads  : int = 4,
         n_layers : int = 2,
         dropout  : float = 0.3,
     ):
         super().__init__()
 
-        # Encoders: convert raw signals into sequences of feature vectors
+        # Encoders
         self.eeg_encoder = EEGEncoder(n_channels=32, d_model=d_model, dropout=dropout)
         self.gsr_encoder = GSREncoder(d_model=d_model, dropout=dropout)
 
-        # Bidirectional cross-modal attention: EEG ↔ GSR information exchange
+        # Bidirectional cross-modal attention
         self.cross_attention = BidirectionalCrossModalAttention(
             d_model  = d_model,
             n_heads  = n_heads,
@@ -77,10 +70,10 @@ class PhysiologicalNet(nn.Module):
 
         # Classification head: fused 2D vector → 5 emotion logits
         self.classifier = ClassificationHead(
-            in_features = 2 * d_model,   # 256
+            in_features = 2 * d_model,   
             hidden_dim  = 128,
             n_classes   = N_CLASSES,
-            dropout     = dropout + 0.1,  # slightly higher dropout in head
+            dropout     = dropout + 0.1, 
         )
 
         # Weight initialisation (Xavier uniform is good for classification networks)
@@ -98,19 +91,19 @@ class PhysiologicalNet(nn.Module):
 
     def forward(
         self,
-        eeg: torch.Tensor,    # (B, 32, 512)
-        gsr: torch.Tensor,    # (B, 512)
+        eeg: torch.Tensor,    
+        gsr: torch.Tensor,    
     ) -> torch.Tensor:
 
         # 1. Encode each modality into feature sequences
-        eeg_feat = self.eeg_encoder(eeg)   # (B, T', D)
-        gsr_feat = self.gsr_encoder(gsr)   # (B, T', D)
+        eeg_feat = self.eeg_encoder(eeg)   
+        gsr_feat = self.gsr_encoder(gsr)   
 
         # 2. Bidirectional cross-modal attention
-        fused = self.cross_attention(eeg_feat, gsr_feat)   # (B, 2D)
+        fused = self.cross_attention(eeg_feat, gsr_feat)   
 
         # 3. Classify
-        logits = self.classifier(fused)   # (B, 5)
+        logits = self.classifier(fused)   
 
         return logits
 
@@ -147,10 +140,7 @@ class PhysiologicalNet(nn.Module):
         ]
         return "\n".join(lines)
 
-
-# ---------------------------------------------------------------------------
-# Shape verification
-# ---------------------------------------------------------------------------
+#verification ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     B = 4
@@ -179,6 +169,3 @@ if __name__ == "__main__":
     print("\n" + net.model_summary())
     print("\nPhysiologicalNet shape test passed")
 
-"""
-bash to run : python -m member1_physiological.models.physiological_net
-"""

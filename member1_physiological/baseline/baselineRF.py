@@ -1,21 +1,3 @@
-"""
-member1_physiological/baselineRF.py
-======================================
-Random Forest baseline for 5-class LOSO emotion recognition on DEAP.
-Used to compare against PhysiologicalNet (EEG+GSR+BDCMA).
-
-Feature extraction:
-  - EEG : band power in 5 frequency bands x 32 channels = 160 features
-  - GSR : mean, std, max, min, slope = 5 features
-  - Total: 165 features per window
-
-Usage:
-    python -m member1_physiological.baselineRF \
-        --data_dir /kaggle/input/datasets/suhirabalarajan/deap-dataset/DEAP
-
-Author: Suhira Balarajan (214206G)
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -34,9 +16,7 @@ if _repo_root not in sys.path:
 
 from member1_physiological.preprocessing.deap_loader import DEAPLoader
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+# Constants ---------------------------------------------------------------------------
 
 FS = 128
 BANDS = {
@@ -48,10 +28,7 @@ BANDS = {
 }
 CLASS_NAMES = ["stress", "calm", "happy", "sad", "angry"]
 
-
-# ---------------------------------------------------------------------------
-# Feature extraction
-# ---------------------------------------------------------------------------
+# Feature extraction ---------------------------------------------------------------------------
 
 def extract_features(eeg: np.ndarray, gsr: np.ndarray) -> np.ndarray:
     """
@@ -77,10 +54,7 @@ def extract_features(eeg: np.ndarray, gsr: np.ndarray) -> np.ndarray:
 
     return np.array(features, dtype=np.float32)
 
-
-# ---------------------------------------------------------------------------
-# LOSO with Random Forest
-# ---------------------------------------------------------------------------
+# LOSO with Random Forest ---------------------------------------------------------------------------
 
 def run_rf_loso(subject_data: dict) -> None:
     subject_ids = sorted(subject_data.keys())
@@ -141,10 +115,7 @@ def run_rf_loso(subject_data: dict) -> None:
     print(f"PhysiologicalNet (EEG+GSR+BDCMA) — LOSO Macro-F1 : ~0.17")
     print(f"{'═'*52}")
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# CLI ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Random Forest baseline — 5-class LOSO on DEAP")

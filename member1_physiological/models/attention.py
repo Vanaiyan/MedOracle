@@ -1,10 +1,8 @@
-
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 class CrossModalAttentionBlock(nn.Module):
     def __init__(
@@ -19,25 +17,20 @@ class CrossModalAttentionBlock(nn.Module):
             f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
 
         # Multi-head cross-attention
-        # PyTorch's MultiheadAttention accepts Q from one sequence,
-        # K and V from another — exactly what we need.
         self.cross_attention = nn.MultiheadAttention(
             embed_dim   = d_model,
             num_heads   = n_heads,
             dropout     = dropout,
-            batch_first = True,   # input shape (B, T, D) — not (T, B, D)
+            batch_first = True,  
         )
 
-        # Layer norms (post-attention, pre-FFN)
+        # Layer norms
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
 
-        # Position-wise Feed-Forward Network
-        # Transforms each time step independently: D → 4D → D
-        # This is the "compute" step after attention gathers information.
         self.ffn = nn.Sequential(
             nn.Linear(d_model, ffn_dim),
-            nn.GELU(),            # GELU smoother than ReLU for transformers
+            nn.GELU(),          
             nn.Dropout(dropout),
             nn.Linear(ffn_dim, d_model),
             nn.Dropout(dropout),
@@ -45,15 +38,15 @@ class CrossModalAttentionBlock(nn.Module):
 
     def forward(
         self,
-        query_features: torch.Tensor,    # (B, T', D) — the modality that ASKS
-        context_features: torch.Tensor,  # (B, T', D) — the modality that ANSWERS
+        query_features: torch.Tensor,    
+        context_features: torch.Tensor,  
     ) -> torch.Tensor:
 
-        # Cross-attention: Q from query modality, K&V from context modality
+        # Cross-attention
         attended, _ = self.cross_attention(
-            query   = query_features,    # Q: (B, T', D)
-            key     = context_features,  # K: (B, T', D)
-            value   = context_features,  # V: (B, T', D)
+            query   = query_features,    
+            key     = context_features, 
+            value   = context_features, 
         )
 
         # Residual + LayerNorm (pre-norm style)
@@ -62,7 +55,7 @@ class CrossModalAttentionBlock(nn.Module):
         # Feed-forward with residual
         x = self.norm2(x + self.ffn(x))
 
-        return x   # (B, T', D)
+        return x   
 
 
 class BidirectionalCrossModalAttention(nn.Module):
@@ -94,33 +87,29 @@ class BidirectionalCrossModalAttention(nn.Module):
 
     def forward(
         self,
-        eeg_features: torch.Tensor,   # (B, T', D)
-        gsr_features: torch.Tensor,   # (B, T', D)
+        eeg_features: torch.Tensor, 
+        gsr_features: torch.Tensor, 
     ) -> torch.Tensor:
 
-        attended_eeg = eeg_features    # will be updated by GSR context
-        attended_gsr = gsr_features    # will be updated by EEG context
+        attended_eeg = eeg_features    
+        attended_gsr = gsr_features    
 
         # Apply N layers of bidirectional cross-attention
-        # At each layer: each modality reads from the OTHER modality's current state
         for eeg_to_gsr_layer, gsr_to_eeg_layer in zip(
             self.eeg_to_gsr_layers, self.gsr_to_eeg_layers
         ):
-            # EEG uses GSR context (current attended states)
             new_eeg = eeg_to_gsr_layer(
                 query_features   = attended_eeg,
                 context_features = attended_gsr,
             )
-            # GSR uses EEG context (current attended states)
             new_gsr = gsr_to_eeg_layer(
                 query_features   = attended_gsr,
                 context_features = attended_eeg,
             )
-            # Update both for next layer
             attended_eeg = new_eeg
             attended_gsr = new_gsr
 
-        # Concatenate along embedding dimension: (B, T', 2D)
+        # Concatenate 
         fused_sequence = torch.cat([attended_eeg, attended_gsr], dim=-1)
 
         # Global average pooling over time dimension: (B, 2D)
@@ -130,10 +119,7 @@ class BidirectionalCrossModalAttention(nn.Module):
 
         return fused_vector   # (B, 2D)
 
-
-# ---------------------------------------------------------------------------
-# Shape verification
-# ---------------------------------------------------------------------------
+# Shape verification ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     from encoders import EEGEncoder, GSREncoder, D_MODEL, T_PRIME
