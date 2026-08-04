@@ -1,35 +1,3 @@
-"""
-member2_video_fusion/models/resnet_encoder.py
-=============================================
-MedOracle — Member 2 (Vanaiyan)
-
-ResNet50 frame encoder.
-
-Extracts a 2048-dimensional feature vector from each face-cropped frame.
-These per-frame features are then fed as a sequence into the BiLSTM.
-
-Fine-tuning strategy (v3.1 — discriminative fine-tune)
-------------------------------------------------------
-  FROZEN   : conv1, bn1, layer1, layer2, layer3 — low/mid ImageNet features.
-  TRAINABLE: layer4 conv weights — adapt the high-level features to faces, BUT
-             trained at a very low LR (1e-5) by the training loop so they adapt
-             slowly and cannot memorise actor identity (the v2 failure mode).
-  FROZEN-BN: every BatchNorm in the backbone (incl. layer4) is kept in eval()
-             mode via the train() override, so running stats never drift →
-             stable features and smooth validation curves.
-  REMOVED  : fc                 — original ImageNet 1000-class head, not needed
-
-  This is the middle path between v2 (full layer4 fine-tune → train/val gap
-  ~0.25) and a fully-frozen backbone (→ severe underfitting).
-
-Output per frame: 2048-dim feature vector (avgpool output)
-
-Input shape  : (B, 3, 224, 224)   — batch of single frames
-Output shape : (B, 2048)          — batch of feature vectors
-
-Author: Vanaiyan Kirupagaran (214215H)
-"""
-
 from __future__ import annotations
 
 import torch

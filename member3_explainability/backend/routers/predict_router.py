@@ -409,6 +409,9 @@ async def predict_multimodal(
                 video_frames, _quality = _process_video(tmp_path)
                 if video_frames is not None:
                     sq = prediction_output["signal_quality"]
+                    # 32 steps keeps the CPU IG pass to ~1-2 min per request (the
+                    # 128 default is ~7 min through ResNet50+BiLSTM) while still
+                    # giving a solid attribution estimate for the demo.
                     ig_attribution = explain_fused(
                         eeg=eeg_arr, gsr=gsr_arr, video_frames=video_frames,
                         eeg_quality=sq["eeg"], gsr_quality=sq["gsr"],

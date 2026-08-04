@@ -1,34 +1,3 @@
-"""
-member2_video_fusion/models/bilstm.py
-======================================
-MedOracle — Member 2 (Vanaiyan)
-
-Bidirectional LSTM temporal model.
-
-Takes the sequence of 2048-dim frame features produced by ResNet50Encoder
-and models the temporal dynamics across T=16 frames to produce a final
-5-class emotion prediction.
-
-Why BiLSTM? (Hochreiter & Schmidhuber, 1997)
----------------------------------------------
-  A unidirectional LSTM only sees frames left-to-right.
-  A BiLSTM processes the sequence in both directions and concatenates
-  the hidden states, giving the model context from both early and late
-  frames when making its decision. This is important for emotion — a
-  smile that builds gradually looks different from one that fades.
-
-Architecture
-------------
-  Input  : (B, T, 2048)   — sequence of ResNet50 frame features
-  BiLSTM : hidden=256 per direction × 2 directions = 512 effective
-           2 stacked layers, inter-layer dropout=0.3
-  Output : mean-pooled BiLSTM output over all T timesteps → (B, 512)
-  Head   : Linear(512 → 256) → ReLU → Dropout(0.4) → Linear(256 → 5)
-  Final  : logits (B, 5)  +  softmax probabilities (B, 5)
-
-Author: Vanaiyan Kirupagaran (214215H)
-"""
-
 from __future__ import annotations
 
 import torch

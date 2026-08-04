@@ -1,35 +1,3 @@
-"""
-member2_video_fusion/evaluation/ablation_study.py
-=================================================
-MedOracle — Ablation study (C1–C8) + Wilcoxon significance.
-
-Evaluates the contribution of each fusion component on a PAIRED cross-dataset
-eval set. Because DEAP (physio) and CREMA-D (video) share no subjects, each
-"sample" pairs a real DEAP EEG/GSR window with a held-out CREMA-D video clip of
-the SAME emotion. We precompute each modality's prediction once, then evaluate
-all conditions over many random pairings — the pairing variability is the
-natural repeated measurement for the significance test.
-
-Conditions (CLAUDE.md RESOLVED ISSUE 8)
----------------------------------------
-    C1  physio only                         (baseline)
-    C2  video only                          (baseline)
-    C3  equal-weight fusion (0.5 / 0.5)
-    C4  confidence-weighted (no quality penalty)
-    C5  FULL method: confidence × quality gating
-    C6  robustness: video quality forced poor (α=0.1)
-    C7  robustness: video missing → graceful degradation (physio only)
-    C8  robustness: physio quality forced poor (α=0.1)
-
-Metric: macro-averaged F1.
-Significance: one-tailed Wilcoxon signed-rank, C5 vs {C1, C2, C3}, α=0.05
-              (member1_physiological.utils.metrics.wilcoxon_test).
-
-Run (needs data/DEAP + data/CREMA-D + the trained checkpoints):
-    python -m member2_video_fusion.evaluation.ablation_study            # full
-    python -m member2_video_fusion.evaluation.ablation_study --quick    # small/fast
-"""
-
 from __future__ import annotations
 
 import argparse
