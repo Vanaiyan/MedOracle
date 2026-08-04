@@ -1,30 +1,3 @@
-"""
-member2_video_fusion/pipeline.py
-================================
-MedOracle — Member 2 (Vanaiyan Kirupagaran, 214215H)
-
-`run_full_pipeline` — the end-to-end multimodal entry point.
-
-Given physiological (EEG + GSR) and/or video input, this runs Member 1's
-PhysiologicalNet and Member 2's video model, then combines their predictions
-with the canonical gated fusion (`fusion.gated_fusion`), returning the
-M2 → M3 `prediction_output`. Any modality may be omitted → graceful degradation
-(video-only, physio-only, or both).
-
-Note on cross-dataset fusion
-----------------------------
-DEAP (physio) and CREMA-D (video) share no subjects, so a single real recording
-never carries both modalities. In practice the two inputs come from *different*
-sources paired for demonstration/evaluation (see the web-app multimodal demo and
-the ablation study). This module doesn't care where the inputs come from — it
-just runs each available model and fuses.
-
-Physio checkpoint: currently the **random-split demo model** (macro-F1 ~0.42);
-swap `_PHYSIO_CKPT` to the LOSO checkpoint once that evaluation has been run.
-
-Author: Vanaiyan Kirupagaran (214215H)
-"""
-
 from __future__ import annotations
 
 import logging

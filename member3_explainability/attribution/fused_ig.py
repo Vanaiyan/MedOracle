@@ -199,7 +199,17 @@ def build_fused_model(
         )
 
     physio_predictor = PhysiologicalPredictor(physio_checkpoint, device="cpu")
+
+    # The cached video singleton lives on the inference device (e.g. MPS on
+    # Apple Silicon), but IG runs entirely on CPU (physio model is CPU, and
+    # captum + autograd through ResNet50/BiLSTM is most reliable on CPU). Give
+    # the fused model a CPU *copy* so every param/buffer/input shares one device
+    # -- WITHOUT mutating the shared singleton that the normal (MPS) video path
+    # depends on. A cross-device call otherwise surfaces as the misleading
+    # "Mismatched Tensor types in NNPack convolutionOutput" error.
+    import copy
     video_model, _device = _load_video_model()
+    video_model = copy.deepcopy(video_model).cpu().eval()
 
     eeg_mean, eeg_std = physio_predictor.eeg_prep.get_stats()
     gsr_mean, gsr_std = physio_predictor.gsr_prep.get_stats()
@@ -224,7 +234,7 @@ def explain_fused(
     eeg_quality: str,
     gsr_quality: str,
     video_quality: str,
-    n_steps: int = 128,
+    n_steps: int = 16,
 ) -> Dict:
     """
     Real Integrated Gradients over the FUSED prediction (both modalities,
@@ -253,6 +263,11 @@ def explain_fused(
     import torch
     from captum.attr import IntegratedGradients
 
+    # Everything runs on CPU: the physio model is loaded on CPU, captum's IG is
+    # most reliable on CPU, and build_fused_model puts the (possibly MPS/CUDA)
+    # video model on CPU too — so all params, buffers and the input tensors
+    # below live on one device. (A device mismatch here surfaces as the
+    # misleading "Mismatched Tensor types in NNPack convolutionOutput" error.)
     model = build_fused_model(eeg_quality, gsr_quality, video_quality)
     model.eval()
 

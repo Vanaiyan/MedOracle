@@ -1,32 +1,3 @@
-"""
-member2_video_fusion/evaluation/build_synced_dataset.py
-=======================================================
-Build a SYNCHRONISED cross-dataset sample set for multimodal testing / demo.
-
-The problem: no real subject has EEG + GSR + video together — DEAP has
-physiological signals (different people) and CREMA-D has facial video (different
-people). To exercise and demonstrate the multimodal pipeline we construct
-"virtual subjects" by pairing, **by shared emotion label**, a real DEAP EEG/GSR
-window with a real CREMA-D video clip. Both modalities genuinely express the
-same emotion, even though they come from different real people — the standard
-construction for evaluating cross-dataset late fusion.
-
-Output (one self-contained folder per virtual subject):
-    data/synced_samples/
-        subject_01/  eeg.npy (32,512)  gsr.npy (512,)  video.flv   meta.json
-        ...
-        subject_10/
-        manifest.json
-
-Default: 5 emotions × 2 subjects = 10 virtual subjects.
-
-Channel layout / windowing match training (deap_loader.py):
-    EEG = channels 0–31   GSR = channel 36   3 s baseline trimmed   4 s windows.
-
-Run (needs data/DEAP/*.dat and data/CREMA-D/{manifest.csv, VideoFlash/}):
-    python -m member2_video_fusion.evaluation.build_synced_dataset
-"""
-
 from __future__ import annotations
 
 import csv
