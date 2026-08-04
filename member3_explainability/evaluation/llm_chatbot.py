@@ -23,7 +23,7 @@ LLM produced the draft text, the same verification gate applies.
 Without any API key the generator returns the template rationale, so the
 whole system remains runnable and testable offline.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

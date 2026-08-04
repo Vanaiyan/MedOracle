@@ -31,7 +31,7 @@ Design notes
   layer (Phase 2) that plugs in later; this module operates purely on the
   contract dict and the gate arithmetic, which is exact and cheap.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

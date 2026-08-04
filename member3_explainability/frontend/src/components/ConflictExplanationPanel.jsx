@@ -201,12 +201,6 @@ export default function ConflictExplanationPanel({ sessionId }) {
 
           {ex && (
             <div style={{ marginTop: 14, padding: '16px 18px', borderRadius: 'var(--radius-md)', background: 'var(--color-neutral-100)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <span className={`tag ${ex.verified ? 'tag-accent-2' : 'tag-outline'}`}>{ex.verified ? '✓ Verified' : 'Unverified'}</span>
-                <span className="tag tag-neutral">Source: {ex.source}</span>
-                <span className="tag tag-outline">Faithfulness {ex.faithfulness}</span>
-                <span className="tag tag-outline">Hallucination {ex.hallucination_rate}</span>
-              </div>
               <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-neutral-700)', margin: 0 }}>{ex.text}</p>
             </div>
           )}

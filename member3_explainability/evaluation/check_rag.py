@@ -3,8 +3,7 @@ member3_explainability/evaluation/check_rag.py
 ==============================================
 A quick, human-readable check that the RAG layer is working.
 
-Run:
-    python -m member3_explainability.evaluation.check_rag
+
 
 It shows three things:
   1. RETRIEVAL   — the knowledge base returns relevant cited facts for a query.
@@ -14,7 +13,7 @@ It shows three things:
 If retrieval returns facts and hallucination(RAG on) < hallucination(RAG off),
 RAG is working.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

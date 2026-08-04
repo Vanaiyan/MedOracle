@@ -21,7 +21,7 @@ Claim types checked
                  arousal, alpha, ...) is grounded only if a retrieved fact
                  supports it; otherwise it is unsupported (hallucinated).
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

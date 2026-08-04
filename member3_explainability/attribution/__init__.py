@@ -1,21 +1,19 @@
 """
 member3_explainability/attribution
 ==================================
-Phase 2 — the feature-level ATTRIBUTION ENGINE and the answer to the evaluator's
-question "why did you use SHAP, it's used so many times?".
 
 Instead of defaulting to Kernel SHAP, this package:
-  * uses **Integrated Gradients** (Sundararajan et al., 2017) as the PRIMARY
+  * uses **Integrated Gradients** as the PRIMARY
     attribution method — axiomatic, faithful, and cheap for differentiable nets;
-  * keeps **Kernel SHAP** (Lundberg & Lee, 2017) as a COMPARED BASELINE;
-  * reads the model's **intrinsic attention** weights as corroboration;
+  * keeps **Kernel SHAP** as a COMPARED BASELINE;
+  * reads the model's **intrinsic attention** weights;
   * SELECTS the method per measured **faithfulness** (comprehensiveness), so the
     choice of attribution primitive is a data-backed decision, not a default.
 
 The real M1/M2 networks plug in via `ModelWrapper`; a small `DummyEmotionModel`
 lets the whole engine run and be validated before those models are ready.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 

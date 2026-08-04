@@ -10,10 +10,9 @@ Topic restriction: the assistant ONLY answers questions related to
 emotion recognition, SHAP explainability, EEG/GSR/video signals,
 and the MedOracle session results. Off-topic questions are politely refused.
 
-Privacy note: only anonymised SHAP values and emotion labels are sent
-— NO raw EEG/GSR/video signal data ever leaves the system.
 
-Author : Adshaya Balarajah (214024V)
+
+
 """
 
 from __future__ import annotations

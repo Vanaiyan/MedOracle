@@ -15,7 +15,7 @@ It is deliberately consistent with:
   - the entropy confidence     c = 1 - H(P)/log(K)        (Guo et al., 2017)
   - L1-normalised weights      w_m = g_m / sum_m g_m
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

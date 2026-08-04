@@ -4,7 +4,7 @@ member3_explainability/backend/routers/chat_router.py
 POST /chat                        — send message, get LLM response
 GET  /chat/history/{session_id}   — retrieve full chat history
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@ member3_explainability/backend/models.py
 =========================================
 SQLAlchemy ORM models — 4 tables per spec §7.5.
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

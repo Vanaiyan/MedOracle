@@ -4,7 +4,7 @@ member3_explainability/backend/routers/predict_router.py
 POST /predict        — run SHAP pipeline on prediction_output, store to DB
 GET  /explain/{id}   — fetch stored SHAP values for a session
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations

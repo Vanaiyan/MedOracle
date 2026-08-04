@@ -4,7 +4,7 @@ member3_explainability/backend/routers/auth_router.py
 POST /auth/register
 POST /auth/login
 
-Author : Adshaya Balarajah (214024V)
+
 """
 
 from __future__ import annotations
